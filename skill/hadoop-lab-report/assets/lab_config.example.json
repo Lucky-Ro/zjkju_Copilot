@@ -1,0 +1,60 @@
+{
+  "_note": "纯占位示例。真实文件只生成/存在于你的实验项目目录根下,命名 lab_config.json,由 collect_config.py --interactive 交互生成;身份信息必须本人输入,严禁照抄本示例。密码只存那一个文件。",
+  "identity": {
+    "course_name": "Hadoop集群部署与开发",
+    "name": "<你的姓名>",
+    "student_id": "<完整学号>",
+    "student_id_last3": "<自动派生,无需手填>",
+    "college": "<学院>",
+    "major_class": "<专业班级>",
+    "instructor": "<指导教师>",
+    "location": "<实验地点>",
+    "exam_time": "<实验时间>"
+  },
+  "nodes": [
+    {
+      "name": "nodeA",
+      "host": "10.0.0.71",
+      "ssh_port": 22,
+      "username": "hadoop",
+      "hadoop_password": "<HADOOP_PWD>",
+      "root_password": "<ROOT_PWD>",
+      "sudo_password": "<SUDO_PWD>"
+    },
+    {
+      "name": "nodeB",
+      "host": "10.0.0.72",
+      "ssh_port": 22,
+      "username": "hadoop",
+      "hadoop_password": "<HADOOP_PWD>"
+    },
+    {
+      "name": "nodeC",
+      "host": "10.0.0.73",
+      "ssh_port": 22,
+      "username": "hadoop",
+      "hadoop_password": "<HADOOP_PWD>"
+    }
+  ],
+  "fixed_values": {
+    "mariadb_root_password": "<MARIADB_ROOT_PWD>",
+    "hive_user_password": "<HIVE_PWD>"
+  },
+  "packages": [
+    {
+      "name": "apache-hive-3.1.2-bin.tar.gz",
+      "src_type": "local",
+      "src_path": "C:\\path\\to\\packages\\apache-hive-3.1.2-bin.tar.gz",
+      "dest_path": "/home/hadoop/",
+      "node": "nodeA"
+    },
+    {
+      "name": "mysql-connector-java-5.1.49.jar",
+      "src_type": "remote",
+      "src_path": "/home/hadoop/soft/mysql-connector-java-5.1.49.jar",
+      "dest_path": "/home/hadoop/soft/",
+      "node": "nodeA"
+    }
+  ],
+  "tutorial_url": "https://heisun.xyz/docs/hadoop-e/hadoop-e04/"
+}

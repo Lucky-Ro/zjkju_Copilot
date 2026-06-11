@@ -1,0 +1,77 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "lab_config.json — 湛江科技学院 Hadoop 实验报告配置",
+  "description": "本文件是后续所有步骤的唯一配置来源;密码只存在这里,绝不进 SKILL.md / 日志 / 截图。放在用户实验目录(工作目录)根下,跨实验复用。",
+  "type": "object",
+  "required": ["identity", "nodes", "fixed_values", "packages", "tutorial_url"],
+  "additionalProperties": false,
+  "properties": {
+    "_note": { "type": "string", "description": "备注,可选" },
+    "identity": {
+      "type": "object",
+      "description": "报告表头身份信息",
+      "required": ["name", "student_id", "college", "major_class", "instructor", "location", "exam_time"],
+      "additionalProperties": false,
+      "properties": {
+        "course_name": { "type": "string", "default": "Hadoop集群部署与开发", "description": "课程名称,固定值,一般无需改" },
+        "name":        { "type": "string", "description": "学生姓名" },
+        "student_id":  { "type": "string", "description": "完整学号,如 20xxxxxxxxxxx(必须本人填写,严禁照抄示例)" },
+        "student_id_last3": { "type": "string", "description": "学号后3位(记作 NNN),自动从 student_id 派生,无需手填" },
+        "college":     { "type": "string", "description": "学院,如 xx学院" },
+        "major_class": { "type": "string", "description": "专业班级,如 20xx级xx专业x班" },
+        "instructor":  { "type": "string", "description": "指导教师" },
+        "location":    { "type": "string", "description": "实验地点,如 xx楼xxx" },
+        "exam_time":   { "type": "string", "description": "实验时间,如 20xx年x月x日" }
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "description": "每个虚拟机节点的连接信息",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "host", "ssh_port", "username", "hadoop_password"],
+        "additionalProperties": false,
+        "properties": {
+          "name":            { "type": "string", "description": "节点名,如 nodeA / nodeB(教程里 nodea+学号后3位 的逻辑名)" },
+          "host":            { "type": "string", "description": "IP 或主机名,如 10.0.0.71" },
+          "ssh_port":        { "type": "integer", "default": 22, "description": "SSH 端口" },
+          "username":        { "type": "string", "default": "hadoop", "description": "登录用户名(通常 hadoop)" },
+          "hadoop_password": { "type": "string", "description": "hadoop 用户密码 [敏感]" },
+          "root_password":   { "type": "string", "description": "root 密码 [敏感],可选" },
+          "sudo_password":   { "type": "string", "description": "sudo 提权密码 [敏感],一般同 hadoop_password,可选" }
+        }
+      }
+    },
+    "fixed_values": {
+      "type": "object",
+      "description": "教程要用到的固定值(密码类 [敏感]);可按教程需要扩展键",
+      "additionalProperties": { "type": "string" },
+      "properties": {
+        "mariadb_root_password": { "type": "string", "description": "MariaDB/MySQL root 密码 [敏感]" },
+        "hive_user_password":    { "type": "string", "description": "hive 元数据库用户密码 [敏感]" }
+      }
+    },
+    "packages": {
+      "type": "array",
+      "description": "安装包来源:本机(Windows)文件路径,或目标机已存在目录",
+      "items": {
+        "type": "object",
+        "required": ["name", "src_type", "src_path"],
+        "additionalProperties": false,
+        "properties": {
+          "name":      { "type": "string", "description": "包名,如 apache-hive-3.1.2-bin.tar.gz" },
+          "src_type":  { "type": "string", "enum": ["local", "remote"], "description": "local=本机Windows路径需上传; remote=目标机已存在" },
+          "src_path":  { "type": "string", "description": "src_type=local 时为 Windows 路径;=remote 时为目标机路径" },
+          "dest_path": { "type": "string", "description": "目标机落地路径(local 上传目的地;remote 时即所在目录)" },
+          "node":      { "type": "string", "description": "放到哪个节点(对应 nodes[].name);缺省=所有相关节点" }
+        }
+      }
+    },
+    "tutorial_url": {
+      "type": "string",
+      "format": "uri",
+      "description": "本次实验教程网址,如 https://heisun.xyz/docs/hadoop-e/hadoop-e04/"
+    }
+  }
+}

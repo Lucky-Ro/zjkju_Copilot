@@ -1,0 +1,35 @@
+# ===== 绝不提交:含明文密码 / 教程缺省凭据 =====
+lab_config.json
+**/lab_config.json
+*_popup.txt
+# 缺省知识库由 build_series_kb.py 生成到项目目录,含教程账号/密码/IP —— 不入库
+series_defaults.json
+series-defaults.md
+
+# ===== 运行产物(含真实日志/截图/报告,可能含敏感信息)=====
+runs/
+*.log
+live.md
+
+# ===== 大文件 / 本地素材 =====
+HadoopDemo/
+*.tar.gz
+*.zip
+*.ova
+*.vdi
+
+# ===== Python =====
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# ===== 临时/中间文件 =====
+_*.txt
+_*.docx
+*.pdf
+~$*.docx
+
+# 说明:assets/template.docx 是 bundle 的学校空白模板,需要保留 —— 不要忽略它。
+# 若你的模板含个人信息,请改用脱敏版再提交,或把它也加入忽略并在 README 说明如何自备模板。
