@@ -12,19 +12,21 @@
 
 ---
 
-## 0. 第零步 —— 开始前的准备
+## 0. 开始前的准备
 
 1. 安装好任意一个agent。 **[Claude Code](https://claude.com/claude-code)** 或者 **[Codex](https://chatgpt.com/zh-Hans-CN/codex/)** （可能需要科学网络环境）
-2. 搭配[CCSwitch](https://ccswitch.io/zh/)以使用国产模型
-> [在 Codex 中使用 DeepSeek（超链接）](https://ccswitch.io/zh/tutorials/codex-deepseek-routing-guide)
-
-> [在 Claude Code 中使用 Deepseek](https://www.bilibili.com/video/BV1pQRNBsEGs/)
+> **搭配[CCSwitch](https://ccswitch.io/zh/)以使用国产模型**
+> 
+>> [搭配 CCSwitch 在 Codex 中使用 DeepSeek（超链接）](https://ccswitch.io/zh/tutorials/codex-deepseek-routing-guide)
+>>
+>> [搭配 CCSwitch 在 Claude Code 中使用 Deepseek](https://www.bilibili.com/video/BV1pQRNBsEGs/)
 3. 把 [`skill/hadoop-lab-report/`](../skill/hadoop-lab-report/) 整个文件夹放到 Claude 的 skills 目录，让 Claude 发现它：
    ```
    C:\Users\<自己的用户名>\.claude\skills\hadoop-lab-report\     # Windows
    ```
 4. 你的 **实验虚拟机已就绪，并可以连接FianlShell**。
-5. 新建一个文件夹；在 Claude Code 中选择该文件夹作为工作目录（让AI在文件夹中写文档）。需要将老师发的 Hadoop 文件夹拷贝入该文件夹。
+5. 新建一个文件夹；在 Claude Code 中选择该文件夹作为工作目录（让AI在文件夹中写文档）。
+6. 需要将 **老师发的 Hadoop 文件夹** 与 **报告模板** 拷贝入该工作文件夹。
 
 ---
 
