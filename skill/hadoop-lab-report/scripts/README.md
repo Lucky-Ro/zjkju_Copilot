@@ -17,7 +17,7 @@
 | `build_series_kb.py` | 抓 P1–P7 全系列 → **项目目录** `./series_defaults.json` + `./series-defaults.md`(缺省密码/IP/主机名/端口/包;含真实缺省值,过边界不进 skill 目录) | `[--max 7] [--out-dir .]`(在项目目录重建知识库) |
 | `render_shot.py` | `run.log`(按 `### ` 分段)→ 深色终端 PNG(Edge 无头,2x 清晰);也支持单段即时渲染 | `--from-log run.log --out shots/`  或  `--title T --cmd C --output-text O --out x.png` |
 | `convert_template.py` | `干净的模板.doc` → `assets/template.docx`(Word COM 优先,soffice 备选) | `[in.doc] [out.docx]`(缺省即转 bundle) |
-| `fill_report.py` | python-docx 编辑**现有**模板:填表头 + 各栏目填段落/截图/#FFF2CC 代码块嵌表;**易读排版**(1.5 行距/首行缩进/步骤留白);`--into` 续写时裁末尾空白再追加 | `--config ... (--template 从零 \| --into 续写) (--content report.json \| --auto ...) -o report.docx` |
+| `fill_report.py` | python-docx 编辑**现有**模板:填表头 + 各栏目填段落/截图/#FFF2CC 代码块嵌表;**版式固化**(表头个人信息居中、正文左对齐、单倍行距、**黄色命令框满宽 pct100%**、步骤留白);`--into` 续写时裁末尾空白再追加 | `--config ... (--template 从零 \| --into 续写) (--content report.json \| --auto ...) -o report.docx` |
 | `popup.py` | **统一弹窗**(远程帮修抓注意力):中文写 UTF-8 临时文件 → `notify_popup.ps1 -WindowStyle Hidden`(只弹对话框、不留空白窗)→ detached | `popup.py "中文消息" [--title T]` |
 | `notify_popup.ps1` | 底层弹框(BurntToast→Forms.MessageBox→msg.exe→响铃);**ASCII 脚本**,中文走 `-MessageFile`(UTF-8)。一般由 `popup.py` 调用 | `notify_popup.ps1 -MessageFile x.txt` |
 | `live_tail.ps1` | 实时日志窗口:**立刻打印已有内容** + StreamReader 150ms 低延迟跟随 + 绝对路径 + UTF-8 + 着色(由 ssh_runner 自动拉起) | `live_tail.ps1 -Path <abs run.log>` |

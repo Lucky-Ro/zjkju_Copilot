@@ -3,7 +3,8 @@
 """把内容填进学校实验报告模板(确定性 docx 组装器)。
 
 引擎:python-docx 直接编辑**现有** template.docx(开→改单元格→存),保留官方版式;
-代码块用淡金 #FFF2CC + ShadingType.CLEAR + 细黑边框 + 宽度 auto + Consolas 五号(长行 9pt);截图左对齐满栏、无图注。
+代码块用淡金 #FFF2CC + ShadingType.CLEAR + 细黑边框 + **宽度满栏(pct 100%,撑满整页文字区)** + Consolas 五号(长行 9pt)。
+对齐:**首页表头个人信息居中、后文正文一律左对齐**;截图左对齐满栏、无图注。
 
 两种用法:
   # 1) 由 Claude 产出 report.json(各栏目内容块),最忠实:
@@ -25,7 +26,7 @@ import sys
 
 import docx
 from docx.shared import Pt, Inches, Cm, RGBColor
-from docx.enum.text import WD_LINE_SPACING
+from docx.enum.text import WD_LINE_SPACING, WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
@@ -40,7 +41,9 @@ CODE_FONT = "Consolas"
 CODE_SIZE = Pt(10.5)        # 五号
 CODE_SIZE_SMALL = Pt(9)     # 超长行降 9pt,免撑破(匹配样例对 sftp/put 长行的处理)
 CODE_LONG = 96             # 行长超过该字符数视为「超长行」,降到 9pt
-TABLE_W = 8300              # DXA,仅个别兜底用;代码块已改 auto 宽,不再据此定宽
+TABLE_W = 8300              # DXA,仅个别兜底用;代码块已改满宽(pct 100%),不再据此定宽
+CODE_PCT = "5000"           # OOXML pct 单位 = 1/50 %,故 5000 = 100%:代码框撑满整页文字区
+TABLE_W_FULL = 8787         # DXA,整页文字区宽(A4 21cm − 左3 − 右2.5 = 15.5cm);gridCol 兜底用
 IMG_W = Cm(15.5)            # 截图满栏(匹配样例 ≈15.49cm),左对齐等比
 BODY_SIZE = 12              # 小四,正文
 LINE = 1.0                  # 单倍行距(匹配样例;去掉 1.5 的「AI 味」留白)
@@ -63,15 +66,33 @@ def _set(el, tag, **attrs):
     return e
 
 
+def _set_or_update(parent, tag, **attrs):
+    """找到已有子元素就改它的属性,没有才新建——避免重复插入(如 add_table 自带的
+    w:tblW/w:tcW;若再 append 一个,Word 取第一个、改动失效)。"""
+    e = parent.find(qn(tag))
+    if e is None:
+        e = OxmlElement(tag)
+        parent.append(e)
+    for k, v in attrs.items():
+        e.set(qn(k), v)
+    return e
+
+
 def shade(cell, fill):
     _set(cell._tc.get_or_add_tcPr(), "w:shd", **{"w:val": "clear", "w:color": "auto", "w:fill": fill})
 
 
-def set_table_auto(tbl):
-    """代码块表宽 = auto(随内容):短命令小框、长命令撑满,匹配样例。
-    细黑边框 sz4 #000000。不设 tblLayout fixed、不强制列宽(auto 模式由内容决定)。"""
+def set_table_full(tbl):
+    """代码块表宽 = 100%(pct 5000):**撑满整个正文单元格=整页文字区**,不随内容收缩。
+    细黑边框 sz4 #000000。pct 百分比宽度自定宽,无需 tblLayout fixed(匹配 P6 样例)。"""
     tblPr = tbl._tbl.tblPr
-    _set(tblPr, "w:tblW", **{"w:w": "0", "w:type": "auto"})
+    _set_or_update(tblPr, "w:tblW", **{"w:w": CODE_PCT, "w:type": "pct"})   # 改 add_table 自带的 tblW
+    # tblGrid 列宽也撑满:pct 兜底——个别渲染器(如旧版 LibreOffice)忽略 nested 表的 pct 时退回 gridCol
+    grid = tbl._tbl.find(qn("w:tblGrid"))
+    if grid is not None:
+        gc = grid.find(qn("w:gridCol"))
+        if gc is not None:
+            gc.set(qn("w:w"), str(TABLE_W_FULL))
     borders = OxmlElement("w:tblBorders")
     for side in ("top", "left", "bottom", "right", "insideH", "insideV"):
         _set(borders, f"w:{side}", **{"w:val": "single", "w:sz": "4", "w:color": CODE_BORDER})
@@ -99,8 +120,9 @@ def trim_trailing_empty(cell):
 
 def add_para(cell, text, size=BODY_SIZE, bold=False, italic=False, color=None,
              indent=False, space_before=0, space_after=6, line=LINE):
-    # 默认左对齐(匹配样例,不居中);说明句无首行缩进、单倍行距
+    # 正文一律左对齐(显式设 LEFT,防止继承模板/样式里的居中);说明句无首行缩进、单倍行距
     p = cell.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.LEFT
     pf = p.paragraph_format
     pf.space_before = Pt(space_before)
     pf.space_after = Pt(space_after)
@@ -130,7 +152,7 @@ def _tiny_para(cell):
 
 
 def add_code(cell, code, lang=None, tight_below=False):
-    """代码块 = 单格嵌套表:#FFF2CC CLEAR 底 + Consolas 五号 + 细黑边框 + 宽度 auto(随内容)。
+    """代码块 = 单格嵌套表:#FFF2CC CLEAR 底 + Consolas 五号 + 细黑边框 + **宽度满栏(pct 100%)**。
     超长行降 9pt 免撑破。tight_below=True 时(后面紧跟该命令的截图)下方不留空隙,做到「代码—截图」无缝。"""
     pre = cell.add_paragraph()
     pre.paragraph_format.space_before = Pt(2)
@@ -138,10 +160,10 @@ def add_code(cell, code, lang=None, tight_below=False):
     pre.paragraph_format.line_spacing_rule = WD_LINE_SPACING.EXACTLY
     pre.paragraph_format.line_spacing = Pt(3)
     nt = cell.add_table(rows=1, cols=1)
-    set_table_auto(nt)
+    set_table_full(nt)
     nc = nt.rows[0].cells[0]
     shade(nc, CODE_FILL)
-    _set(nc._tc.get_or_add_tcPr(), "w:tcW", **{"w:w": "0", "w:type": "auto"})  # 单元格也 auto,与表一致
+    _set_or_update(nc._tc.get_or_add_tcPr(), "w:tcW", **{"w:w": CODE_PCT, "w:type": "pct"})  # 改自带 tcW → 100%
     first = True
     for ln in (code.rstrip("\n").split("\n") or [""]):
         p = nc.paragraphs[0] if first else nc.add_paragraph()
@@ -161,12 +183,13 @@ def add_code(cell, code, lang=None, tight_below=False):
 
 
 def add_image(cell, path, caption=None, tight_above=False):
-    """截图:**左对齐**(默认,匹配样例)、满栏 ≈15.5cm、等比、**图下无图注**。
+    """截图:**左对齐**(显式,匹配样例)、满栏 ≈15.5cm、等比、**图下无图注**。
     caption 形参保留以兼容旧调用,但不再渲染任何图注(样例全程无图注;说明句在图上方交代)。"""
     if not path or not os.path.exists(path):
         add_para(cell, f"[缺图: {path}]", size=10, italic=True, color="C00000")
         return
-    p = cell.add_paragraph()                                       # 默认左对齐,不设 alignment
+    p = cell.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.LEFT                          # 截图左对齐(显式,防继承居中)
     p.paragraph_format.space_before = Pt(0 if tight_above else 4)  # 紧跟代码时不留缝
     p.paragraph_format.space_after = Pt(2)
     p.add_run().add_picture(path, width=IMG_W)
@@ -220,6 +243,8 @@ def set_value_after(table, label, value):
                     if cells[j]._tc is not c._tc:
                         cells[j].text = value
                         for p in cells[j].paragraphs:
+                            # 表头个人信息居中(模板本是居中,但 .text= 会清成无对齐→退回左,故显式补回)
+                            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                             for r in p.runs:
                                 r.font.size = Pt(12)
                         return True

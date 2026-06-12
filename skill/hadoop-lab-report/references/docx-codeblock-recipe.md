@@ -15,27 +15,30 @@
 - 字体 **Consolas**,字号 **五号 = 10.5pt**(OOXML 的 `w:sz` 用半点,故 `w:sz w:val="21"`);
   **超长行降 9pt**(`w:sz w:val="18"`)免撑破(匹配样例对 sftp/put 长行的处理)。
 - 边框:**single `sz=4` `#000000`(细黑)**,匹配样例(非旧的淡金 `D9C27A`)。
-- **宽度 auto(随内容)**:表格 `<w:tblW w:w="0" w:type="auto"/>`、单元格 `<w:tcW w:w="0" w:type="auto"/>`。
-  **不再用「双重固定宽 + `tblLayout fixed`」强制定宽**——auto 让短命令小框、长命令撑满,匹配样例。
+- **宽度满栏(100%)**:表格 `<w:tblW w:w="5000" w:type="pct"/>`、单元格 `<w:tcW w:w="5000" w:type="pct"/>`
+  (pct 单位 = 1/50 %,故 **5000 = 100%**)——**黄色命令框一律撑满整页文字区**,不随命令长短缩放。
+  `tblGrid` 的 `gridCol` 同设满栏宽(≈8787 dxa = 15.5cm)作兜底,个别忽略 nested 表 pct 的渲染器也满宽。
+  **注意**:`add_table` 会自带一个 `<w:tblW type="auto">` 和 `<w:tcW type="dxa">`,要**改这两个已有元素**,
+  不能再 append 新的(否则 Word 取第一个、改动失效——见 `fill_report.py` 的 `_set_or_update`)。
 - 每行代码一个 `<w:p>`(OOXML 不能用 `\n`,多行=多段),保留缩进。
 
 ### 可直接套用的 XML 片段(单格代码块)
 ```xml
 <w:tbl>
   <w:tblPr>
-    <w:tblW w:w="0" w:type="auto"/>                  <!-- 宽度 auto:随内容,短命令小框、长命令撑满 -->
+    <w:tblW w:w="5000" w:type="pct"/>                <!-- 宽度 100%(pct 5000):撑满整页文字区 -->
     <w:tblBorders>
       <w:top w:val="single" w:sz="4" w:color="000000"/>
       <w:left w:val="single" w:sz="4" w:color="000000"/>
       <w:bottom w:val="single" w:sz="4" w:color="000000"/>
       <w:right w:val="single" w:sz="4" w:color="000000"/>
     </w:tblBorders>
-    <!-- 不设 tblLayout fixed:auto 模式由内容决定列宽 -->
+    <!-- 不设 tblLayout fixed:pct 百分比宽度自定宽 -->
   </w:tblPr>
   <w:tr>
     <w:tc>
       <w:tcPr>
-        <w:tcW w:w="0" w:type="auto"/>               <!-- 单元格也 auto,与表一致 -->
+        <w:tcW w:w="5000" w:type="pct"/>             <!-- 单元格也 100%,与表一致 -->
         <w:shd w:val="clear" w:color="auto" w:fill="FFF2CC"/>   <!-- clear 非 solid;淡金 -->
         <w:tcMar><w:top w:w="60"/><w:bottom w:w="60"/><w:left w:w="120"/><w:right w:w="120"/></w:tcMar>
       </w:tcPr>
