@@ -12,10 +12,10 @@
 | 脚本 | 职责 | 关键接口 |
 |---|---|---|
 | `collect_config.py` | 教程缺省**直接落盘**(`--autofill`,不问用户、已有不覆盖)、**弹新控制台**收身份(`--popup` 跑 `--interactive` 完后自动校验、缺项再弹)、完整性校验(缺项/占位/格式,**无身份门禁**)、派生 `student_id_last3`、脱敏回显。写盘前过 `ensure_outside_skill` 边界。 | `--autofill [--tutorial URL]` / `--popup` / `--interactive` / `--validate` / `--show` / `--derive` `[--config ...]` |
-| `parse_tutorial.py` | 抓教程 HTML → `plan.json`(子任务/步骤/命令/`lang`/`repl`/`kind`/`needs_sid`/`expect_output`/常见问题) | `<url> -o plan.json` |
-| `ssh_runner.py` | paramiko 持久 shell:**实时逐行回显**(命令加 `>> ` 前缀,tee 进 `run.log` 兼作截图源);**启动自动弹实时窗口**(`--no-window` 关);交互应答自动喂入;`repl` 走 `hive -f`/`mysql`;heredoc 写配置;`state.json` 断点续跑;`****` 打码;`--preflight` 写 `preflight.json`(含 `missing[]`/`ready`) | `--preflight PLAN` / `--run PLAN [--continue-on-error] [--no-window]` / `--probe NODE` |
+| `parse_tutorial.py` | 抓教程 HTML → `plan.json`(子任务/步骤/命令/`lang`/`repl`/`kind`/`needs_sid`/`expect_output`/常见问题);识别 hive/mysql/**hbase/zk/spark** 提示符 + 裸命令上下文动词,标 `step.repl` | `<url> -o plan.json` |
+| `ssh_runner.py` | paramiko 持久 shell:**实时逐行回显**(tee 进 `run.log` 兼作截图源);**启动自动弹实时窗口**(`--no-window` 关);交互应答自动喂入;**五种 REPL(hive/mysql/hbase/zk/spark)真交互逐句喂入、命令↔回显交错、同子任务复用一个会话(临时节点跨块保留)、每块独立成段→一图**(`--repl-batch` 退回非交互应急);heredoc 写配置;`state.json` 断点续跑;`****` 打码;`--preflight` 写 `preflight.json` | `--preflight PLAN` / `--run PLAN [--continue-on-error] [--no-window] [--repl-batch]` / `--probe NODE` |
 | `build_series_kb.py` | 抓 P1–P7 全系列 → **项目目录** `./series_defaults.json` + `./series-defaults.md`(缺省密码/IP/主机名/端口/包;含真实缺省值,过边界不进 skill 目录) | `[--max 7] [--out-dir .]`(在项目目录重建知识库) |
-| `render_shot.py` | `run.log`(按 `### ` 分段)→ 深色终端 PNG(Edge 无头,2x 清晰);也支持单段即时渲染 | `--from-log run.log --out shots/`  或  `--title T --cmd C --output-text O --out x.png` |
+| `render_shot.py` | `run.log`(按 `### ` 分段)→ 深色终端 PNG(2x 清晰);**截图保真**:滤掉脚本日志/控制行、`>> (应答)` 注解、注入的 `--- xxx ---` 横线、zk 启动 log4j 噪声;识别 hbase/zk/spark 提示符着色;**Edge 无头失效自动回退 Chrome**;也支持单段即时渲染 | `--from-log run.log --out shots/`  或  `--title T --cmd C --output-text O --out x.png` |
 | `convert_template.py` | `干净的模板.doc` → `assets/template.docx`(Word COM 优先,soffice 备选) | `[in.doc] [out.docx]`(缺省即转 bundle) |
 | `fill_report.py` | python-docx 编辑**现有**模板:填表头 + 各栏目填段落/截图/#FFF2CC 代码块嵌表;**版式固化**(表头个人信息居中、正文左对齐、单倍行距、**黄色命令框满宽 pct100%**、步骤留白);`--into` 续写时裁末尾空白再追加 | `--config ... (--template 从零 \| --into 续写) (--content report.json \| --auto ...) -o report.docx` |
 | `popup.py` | **统一弹窗**(远程帮修抓注意力):中文写 UTF-8 临时文件 → `notify_popup.ps1 -WindowStyle Hidden`(只弹对话框、不留空白窗)→ detached | `popup.py "中文消息" [--title T]` |

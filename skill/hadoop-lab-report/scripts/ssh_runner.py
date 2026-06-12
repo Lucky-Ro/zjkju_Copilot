@@ -176,10 +176,15 @@ class Shell:
         # A2:保留输入回显(命令像真人敲的一样出现在提示符后);PS1 用 \h 取**真实 hostname**,
         # 与 render 不再各写一套——截图里的提示符全部来自这条真实流。
         self._tail = ""   # 上一轮残留的裸提示符(无换行),与下一条命令的回显拼成完整行
+        self.repl_state = None   # 当前所处的交互 REPL 名(hive/mysql/hbase/zk/spark);None=普通 shell
+        self.hostname = ""       # 真实主机名(供 zkCli -server 等动态启动命令用,faithful 提示符)
         self._send_raw("export PS1='[\\u@\\h \\W]\\$ '; export LANG=en_US.UTF-8 2>/dev/null\n")
         time.sleep(0.6)
         txt = clean_term(self._drain(0.6))   # 吞掉 banner + 设置命令的回显
         self._tail = txt.rsplit("\n", 1)[-1]  # 但保留行尾的新提示符,供第一条命令拼行
+        m = re.search(r"@([^\s\]]+)", self._tail)   # 从 [user@host ~]$ 提示符里取真实主机名
+        if m:
+            self.hostname = m.group(1)
 
     def _send_raw(self, s):
         self.chan.send(s)
@@ -331,26 +336,57 @@ class Shell:
                 return True
         return False
 
-    # ───────── 交互 REPL(A3,方案②):真实出现 hive>/mysql>/续行 > ─────────
+    # ───────── 交互 REPL(真实出现 hive>/mysql>/hbase(main)>/[zk:…]/scala> 提示符)─────────
+    # 所有 REPL 统一「逐句喂入、等提示符再喂下一句」:命令↔回显逐条交错,绝不批量灌。
+    # 字段:launch 启动命令(zk 动态,见 _repl_launch_cmd,故为 None);prompt 就绪提示符(停在行尾);
+    #       error 失败识别;exit 退出命令;line_based 是否按「每非空行一句」切(zk/hbase/spark 是,
+    #       hive/mysql 按 `;` 切);settle launch 后吸收异步连接日志的秒数(zk 连接是异步的)。
     SHELL_PROMPT_RE = re.compile(r"\][$#] $")
     REPL_SPECS = {
         "hive": {
             "launch": "hive",
             "prompt": re.compile(r"(?:^|\n)hive> $"),
             "error": re.compile(r"FAILED:|^Error\b|Exception", re.M),
-            "exit": "exit;",
+            "exit": "exit;", "line_based": False, "settle": 0.0,
         },
         "mysql": {
             "launch": "mysql -uroot -p",
             "prompt": re.compile(r"(?:^|\n)(?:mysql|MariaDB \[[^\]]*\])> $"),
             "error": re.compile(r"^ERROR \d+", re.M),
-            "exit": "quit",
+            "exit": "quit", "line_based": False, "settle": 0.0,
+        },
+        "hbase": {
+            "launch": "hbase shell",
+            "prompt": re.compile(r"hbase\(main\):\d+:\d+>\s*$"),
+            "error": re.compile(r"^ERROR\b|^ERROR:", re.M),
+            "exit": "quit", "line_based": True, "settle": 0.0,
+        },
+        "zk": {                                   # zkCli.sh:启动命令动态生成(见 _repl_launch_cmd)
+            "launch": None,
+            "prompt": re.compile(r"\[zk:[^\]]*\]\s*$"),   # [zk: nodea220:2181(CONNECTED) N]
+            "error": re.compile(r"KeeperErrorCode|Authentication is not valid"),
+            "exit": "quit", "line_based": True, "settle": 2.0,   # 连接异步,settle 吸收 SyncConnected 等
+        },
+        "spark": {                                # spark-shell(scala);best-effort
+            "launch": "spark-shell",
+            "prompt": re.compile(r"(?:^|\n)scala>\s*$"),
+            "error": re.compile(r"^<console>:|error:|Exception", re.M),
+            "exit": ":quit", "line_based": True, "settle": 0.0,
         },
     }
 
+    def _repl_launch_cmd(self, repl):
+        """REPL 启动命令。zk 动态拼真实主机名 + 端口(faithful:提示符显示 nodea220:2181,与教程一致);
+        其余取 spec['launch']。zk 端口默认 2181,可由 fixed_values.zk_port 覆盖。"""
+        if repl == "zk":
+            port = str((self.cfg.get("fixed_values") or {}).get("zk_port", "2181"))
+            host = self.hostname or self.node.get("host", "localhost")
+            return f"zkCli.sh -server {host}:{port}"
+        return self.REPL_SPECS[repl]["launch"]
+
     @staticmethod
     def split_statements(sql: str):
-        """按「行尾分号」切成独立语句,保留语句内部换行(续行 > 会自然出现)。"""
+        """按「行尾分号」切成独立语句,保留语句内部换行(续行 > 会自然出现)。hive/mysql 用。"""
         stmts, buf = [], []
         for ln in sql.splitlines():
             buf.append(ln)
@@ -361,6 +397,20 @@ class Shell:
         if tail:
             stmts.append(tail + ";")
         return [s for s in stmts if s]
+
+    @staticmethod
+    def split_lines(text: str):
+        """按「每非空行一句」切。zk/hbase/spark 等基于行的 REPL 用(命令不以 `;` 结尾)。
+        顺带剥掉本就是启动命令的行(如 zkCli.sh/hbase shell):那是 launch,由 enter_repl 负责。"""
+        out = []
+        for ln in text.splitlines():
+            s = ln.strip()
+            if not s:
+                continue
+            if re.match(r"^(zkCli\.sh|hbase\s+shell|spark-shell|spark-sql)\b", s):
+                continue
+            out.append(s)
+        return out
 
     def _wait_for(self, prompt_re, captured, timeout=HARD_TIMEOUT, answers=None, idle=REPL_IDLE):
         """读流直到清洗后的残行命中 prompt_re(提示符停在行尾=ready)。
@@ -405,29 +455,63 @@ class Shell:
                     return False, "\n".join(seg)
                 time.sleep(0.1)
 
-    def run_repl(self, repl, statements, timeout=HARD_TIMEOUT, batch=False):
-        """交互式驱动 REPL:等 hive>/mysql> 提示符出现后逐句喂入(一句一回车,等下一个
-        提示符再喂下一句);多行语句的续行 > 自然出现;最后 exit;/quit 退回 shell。
-        成败从清洗后的流里识别 FAILED:/ERROR(shell 哨兵在 REPL 层不可用)。
-        batch=True 退回旧的 hive -f / mysql < file 非交互方式(应急)。"""
-        if batch or repl not in self.REPL_SPECS:
-            return self._run_repl_batch(repl, statements, timeout)
+    def _mysql_answers(self):
+        return [{"re": re.compile(r"Enter password"),
+                 "val": str((self.cfg.get("fixed_values") or {}).get("mariadb_root_password", "")),
+                 "secret": True, "used": False}]
+
+    def _settle(self, seconds, captured):
+        """launch 后吸收异步连接日志(如 zk 的 SyncConnected / 后续 INFO)进**当前段**,
+        直到安静 `seconds`。这样首条命令的回显不会和异步日志挤在一起。不报超时告警。"""
+        pending = self._tail
+        self._tail = ""
+        last = time.time()
+        while time.time() - last < seconds:
+            chunk = self._drain(0.3)
+            if chunk:
+                pending += chunk
+                last = time.time()
+                while "\n" in pending:
+                    line, pending = pending.split("\n", 1)
+                    line = clean_line(line.rstrip("\r"))
+                    if line.strip():
+                        captured.append(line)
+                        self.log.out(line)
+        self._tail = clean_line(pending)
+
+    def enter_repl(self, repl, timeout=HARD_TIMEOUT):
+        """进入交互 REPL(若已在其中则直接返回 True)。发 launch、等就绪提示符,launch+banner
+        落进**当前段**。zk 等连接异步的 REPL 再 settle 一会吸收异步日志。未就绪返回 False。"""
+        if self.repl_state == repl:
+            return True
+        if self.repl_state:
+            self.exit_repl()
         spec = self.REPL_SPECS[repl]
+        answers = self._mysql_answers() if repl == "mysql" else None
         captured = []
-        answers = []
-        if repl == "mysql":
-            answers = [{"re": re.compile(r"Enter password"),
-                        "val": str((self.cfg.get("fixed_values") or {}).get("mariadb_root_password", "")),
-                        "secret": True, "used": False}]
-        self._send_raw(spec["launch"] + "\n")
+        self._send_raw(self._repl_launch_cmd(repl) + "\n")
         ok, _ = self._wait_for(spec["prompt"], captured, timeout=timeout, answers=answers)
         if not ok:
-            self.log.info(f"[!] {repl} REPL 未就绪,退回非交互方式重试。")
+            self.log.info(f"[!] {repl} REPL 未就绪。")
             self._send_raw("\x03\n")          # Ctrl-C 尝试脱身
             self._drain(0.6)
+            return False
+        if spec.get("settle"):
+            self._settle(spec["settle"], captured)
+        self.repl_state = repl
+        return True
+
+    def feed_repl(self, repl, statements, timeout=HARD_TIMEOUT):
+        """向**已进入**的 REPL 逐句喂入本代码块的语句(一句一回车,等下一个提示符再喂下一句),
+        命令↔回显逐条交错。返回**本块**的 (rc, out)。未就绪则退回 _run_repl_batch。"""
+        if not self.enter_repl(repl, timeout=timeout):
             return self._run_repl_batch(repl, statements, timeout)
+        spec = self.REPL_SPECS[repl]
+        answers = self._mysql_answers() if repl == "mysql" else None
+        splitter = self.split_lines if spec.get("line_based") else self.split_statements
+        captured = []
         failed = 0
-        for stmt in self.split_statements(statements):
+        for stmt in splitter(statements):
             self._send_raw(stmt + "\n")
             ok, seg = self._wait_for(spec["prompt"], captured, timeout=timeout, answers=answers)
             if not ok:
@@ -435,12 +519,45 @@ class Shell:
                 break
             if spec["error"].search(seg):
                 failed += 1
-        self._send_raw(spec["exit"] + "\n")
-        self._wait_for(self.SHELL_PROMPT_RE, captured, timeout=360, idle=240)
         return (0 if failed == 0 else 1), "\n".join(captured)
 
+    def exit_repl(self):
+        """退出当前 REPL 回到普通 shell。**静默**吞掉退出噪声(如 zk 的 WATCHER Closed /
+        session closed),不记日志、不进截图;只把行尾的 shell 提示符留作下一条命令拼行。"""
+        if not self.repl_state:
+            return
+        spec = self.REPL_SPECS[self.repl_state]
+        self._send_raw(spec["exit"] + "\n")
+        pending = self._tail
+        self._tail = ""
+        start = time.time()
+        while time.time() - start < 10:
+            chunk = self._drain(0.4)
+            pending = clean_term(pending + chunk)
+            if self.SHELL_PROMPT_RE.search(pending.split("\n")[-1]):
+                break
+            if not chunk:
+                break
+        self._tail = clean_line(pending.split("\n")[-1])
+        self.repl_state = None
+
+    def run_repl(self, repl, statements, timeout=HARD_TIMEOUT, batch=False):
+        """单发封装 = enter+feed+exit(供 --repl-batch 应急或单块调用)。会话保持由 cmd_run
+        直接编排 enter/feed/exit 完成(同子任务同 REPL 复用一个会话、块间不退出)。"""
+        if batch or repl not in self.REPL_SPECS:
+            return self._run_repl_batch(repl, statements, timeout)
+        rc, out = self.feed_repl(repl, statements, timeout=timeout)
+        self.exit_repl()
+        return rc, out
+
     def _run_repl_batch(self, repl, statements, timeout=HARD_TIMEOUT):
-        """(旧路径,应急)把 HiveQL/SQL 写进临时文件,用 hive -f / mysql 非交互执行。"""
+        """(旧路径,应急 --repl-batch / 交互未就绪兜底)非交互方式喂入。
+        交互不可用时退而求其次,不追求交错。"""
+        if repl in ("zk", "hbase", "spark"):
+            # 行式 REPL:把命令逐行通过 heredoc 灌进客户端(应急,不交错)
+            body = "\n".join(self.split_lines(statements))
+            launch = self._repl_launch_cmd(repl)
+            return self.run(f"{launch} <<'CLZJEOF'\n{body}\nCLZJEOF", timeout=timeout)
         body = statements if statements.strip().endswith(";") else statements + ";"
         tmp = f"/tmp/clzj_{uuid.uuid4().hex[:6]}." + ("hql" if repl == "hive" else "sql")
         heredoc = f"cat > {tmp} <<'CLZJEOF'\n{body}\nCLZJEOF"
@@ -647,10 +764,29 @@ def cmd_run(cfg, log, plan, rd, continue_on_error=False, repl_batch=False):
             shells[key] = Shell(connect(node, log), log, cfg, node)
         return shells[key]
 
+    def resolved_key(step):
+        node = node_by_name(cfg, step.get("target_node")) or cfg["nodes"][0]
+        return node["name"]
+
+    def next_exec_step(steps, i):
+        """同子任务内,i 之后第一个真正会执行的步(auto + 有 code)。"""
+        for s in steps[i + 1:]:
+            if s.get("kind") == "auto" and s.get("code"):
+                return s
+        return None
+
+    def exit_all_repls():
+        for s in shells.values():
+            try:
+                s.exit_repl()
+            except Exception:
+                pass
+
     rc_final = 0
     try:
         for sub in plan["subtasks"]:
-            for step in sub["steps"]:
+            steps = sub["steps"]
+            for i, step in enumerate(steps):
                 sid_key = f"{sub['subtask_id']}#{step['idx']}"
                 if st["steps"].get(sid_key) == "done":
                     log.info(f"[skip] {sid_key} 已完成,跳过(仍可在排版阶段引用其证据)")
@@ -678,9 +814,22 @@ def cmd_run(cfg, log, plan, rd, continue_on_error=False, repl_batch=False):
 
                 code = apply_sid(step["code"], sid3)  # 学号占位替换
                 sh = shell_for(step.get("target_node") or cfg["nodes"][0]["name"])
-                if step.get("repl"):
-                    rc, out = sh.run_repl(step["repl"], code, batch=repl_batch)
+                if step.get("repl") and not repl_batch:
+                    # 真交互:进入会话(首块捕获 launch+banner 进本段)→ 逐句喂入本块语句。
+                    # 同子任务下一可执行步若仍是同 REPL+同节点,则**不退出**(会话跨块复用,
+                    # 临时节点 -e 得以保留);否则收尾退出。每块仍是独立 ### 段 → 各自一张图。
+                    sh.enter_repl(step["repl"])
+                    rc, out = sh.feed_repl(step["repl"], code)
+                    nxt = next_exec_step(steps, i)
+                    keep = (nxt is not None and nxt.get("repl") == step["repl"]
+                            and resolved_key(nxt) == resolved_key(step))
+                    if not keep:
+                        sh.exit_repl()
+                elif step.get("repl"):                 # --repl-batch 应急:非交互喂入
+                    sh.exit_repl()
+                    rc, out = sh.run_repl(step["repl"], code, batch=True)
                 else:
+                    sh.exit_repl()                     # 跑普通 shell 命令前,先离开任何 REPL
                     rc, out = sh.run(code)
 
                 if rc == 0:
@@ -697,7 +846,9 @@ def cmd_run(cfg, log, plan, rd, continue_on_error=False, repl_batch=False):
                         rc_final = 1
                         return rc_final
                 save_state(rd, st)
+            exit_all_repls()   # 子任务结束:退出残留会话(回到 shell,临时节点随会话释放)
     finally:
+        exit_all_repls()
         for sh in shells.values():
             try:
                 sh.chan.get_transport().close()

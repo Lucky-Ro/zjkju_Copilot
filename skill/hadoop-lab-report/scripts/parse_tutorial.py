@@ -107,8 +107,10 @@ def text_of(el):
 def strip_prompts(code: str):
     """剥掉代码块里的 REPL/shell 提示符前缀,返回 (干净代码, repl)。
 
-    repl ∈ {None,'hive','mysql','spark'}:命令应送进对应交互会话。
+    repl ∈ {None,'hive','mysql','hbase','zk','spark'}:命令应送进对应交互会话。
     例:'hive> create table ...' -> ('create table ...','hive')
+        '[zk: nodea220:2181(CONNECTED) 0] ls /' -> ('ls /','zk')
+        'hbase(main):001:0> list' -> ('list','hbase')
     """
     repl = None
     out = []
@@ -121,10 +123,63 @@ def strip_prompts(code: str):
         elif re.match(r"^\s*MariaDB\s*\[[^\]]*\]\s*>\s?", ln):
             repl = "mysql"
             ln = re.sub(r"^\s*MariaDB\s*\[[^\]]*\]\s*>\s?", "", ln)
+        elif re.match(r"^\s*\[zk:[^\]]*\]\s?", ln):           # [zk: host:2181(CONNECTED) N]
+            repl = "zk"
+            ln = re.sub(r"^\s*\[zk:[^\]]*\]\s?", "", ln)
+        elif re.match(r"^\s*hbase\(main\):\d+:\d+>\s?", ln):  # hbase(main):001:0>
+            repl = "hbase"
+            ln = re.sub(r"^\s*hbase\(main\):\d+:\d+>\s?", "", ln)
         else:
             ln = re.sub(r"^\s*[\$#]\s+", "", ln)  # shell 提示符 $ / #
         out.append(ln)
     return "\n".join(out).strip("\n"), repl
+
+
+# ── 裸命令块的 REPL 识别(教程常给不带提示符的裸命令)──
+# 某代码块含这些 launch 词 → 为该子任务建立「活跃 REPL 上下文」;之后无提示符的裸命令块,
+# 若每行首词都属于该 REPL 的动词白名单,则判为送进该 REPL(用上下文消歧 create/get/delete 等重名)。
+REPL_LAUNCH = [
+    (re.compile(r"\bzkCli\.sh\b"), "zk"),
+    (re.compile(r"\bhbase\s+shell\b"), "hbase"),
+    (re.compile(r"\bspark-shell\b|\bspark-sql\b"), "spark"),
+]
+REPL_VERBS = {
+    "zk": {"create", "delete", "deleteall", "set", "get", "ls", "ls2", "stat",
+           "getacl", "setacl", "sync", "addauth", "getephemerals",
+           "getallchildrennumber", "config", "quit", "history", "removewatches",
+           "listquota", "setquota", "delquota", "reconfig"},
+    "hbase": {"create", "list", "describe", "disable", "enable", "drop", "put",
+              "get", "scan", "delete", "deleteall", "count", "alter", "truncate",
+              "status", "version", "whoami", "exists", "is_enabled", "is_disabled"},
+}
+
+
+def detect_launch_repl(code: str):
+    """代码块里若含 REPL 启动命令(zkCli.sh / hbase shell / spark-shell),返回该 repl 名。"""
+    for rx, name in REPL_LAUNCH:
+        if rx.search(code):
+            return name
+    return None
+
+
+_SHELL_META = re.compile(r"[|&;><`]|\$\(")   # 含 shell 元字符 → 不是 REPL 命令(zk/hbase 不用管道)
+
+
+def looks_like_repl_block(code: str, repl: str) -> bool:
+    """裸命令块是否「看起来全是该 REPL 的命令」:每非空行首词 ∈ 该 REPL 动词白名单,
+    且不含 shell 元字符(管道/重定向/&& 等)。保守,降低把 shell `ls`/`get` 误判成 REPL 的概率。"""
+    verbs = REPL_VERBS.get(repl)
+    if not verbs:
+        return False
+    lines = [ln.strip() for ln in code.splitlines() if ln.strip()]
+    if not lines:
+        return False
+    for ln in lines:
+        if _SHELL_META.search(ln):
+            return False
+        if ln.split()[0].lower() not in verbs:
+            return False
+    return True
 
 
 def detect_lang(code: str, lang_hint, repl=None):
@@ -132,6 +187,10 @@ def detect_lang(code: str, lang_hint, repl=None):
         return "hiveql"
     if repl == "mysql":
         return "sql"
+    if repl in ("zk", "hbase"):
+        return repl          # zk / hbase 命令(送进对应交互会话)
+    if repl == "spark":
+        return "scala"
     if lang_hint in ("sql", "xml"):
         return lang_hint
     low = code.lower()
@@ -166,6 +225,17 @@ def build_steps(blocks):
     last_node = None
     idx = 0
 
+    # 先扫一遍本子任务的代码块,看有无 REPL 启动命令(zkCli.sh / hbase shell / spark-shell),
+    # 有则建立「活跃 REPL 上下文」——之后无提示符的裸命令块按动词白名单归入该 REPL(见 looks_like_repl_block)。
+    repl_context = None
+    for b in blocks:
+        if b.name == "pre":
+            c, _ = code_of(b)
+            lr = detect_launch_repl(c)
+            if lr:
+                repl_context = lr
+                break
+
     def flush(pre_code=None, lang_hint=None):
         nonlocal idx, buf, last_node
         text = " ".join(t for t in buf if t).strip()
@@ -176,6 +246,14 @@ def build_steps(blocks):
             clean, repl = strip_prompts(pre_code)
             if is_output:
                 expect, clean, repl = clean, "", None
+            elif repl is None and clean:
+                # 裸命令块的 REPL 归属:① 本块就含 launch(如 zkCli.sh)→ 该 repl;
+                # ② 否则若子任务已有活跃 REPL 上下文且本块整块像该 REPL 的命令 → 归入。
+                launch_repl = detect_launch_repl(clean)
+                if launch_repl:
+                    repl = launch_repl
+                elif repl_context and looks_like_repl_block(clean, repl_context):
+                    repl = repl_context
         if not text and not clean and not expect:
             buf = []
             return

@@ -92,23 +92,46 @@ RE_REDIR = re.compile(r"\s*\d?>\s*/dev/null(?:\s+2>&1)?|\s*2>\s*/dev/null")  # >
 RE_SLEEP = re.compile(r"^\s*sleep\s+\d+(?:\.\d+)?\s*;\s*")                    # 开头的 sleep N;
 RE_SRCPROF = re.compile(r"^\s*source\s+/etc/profile[^;&|]*[;&]+\s*")         # 开头的 source /etc/profile…; / &&
 RE_HEREDOC_TAIL = re.compile(r"\s*<<\s*'?\w+'?.*$")                          # 末尾的 <<'EOF'…(REPL 启动行用)
+# 注入的「分隔 echo」(学生本不会敲;它打印的 `--- xxx ---` 就是截图里那条「横线」)。治本在 SKILL.md
+# 「命令零加料」纪律;这里是渲染兜底:命令行里剥掉它,输出里那条横线由 RE_SEP_LINE 滤掉。
+RE_ECHO_SEP = re.compile(r"(?:^|\s*;\s*)echo\s+'?-{2,}[^'\n]*?-{2,}'?(?=\s*;|\s*$)")
+# 形如 `--- status ---` / `------` 的纯分隔横线(dashes 包裹);不会误杀真实输出(`[root1,…]`/`-rw-r--r--` 都不匹配)
+RE_SEP_LINE = re.compile(r"^\s*-{2,}\s+.*\S.*\s+-{2,}\s*$|^\s*-{4,}\s*$")
 
 
 def clean_cmd(s):
     """剥掉为自动化注入、学生本不会敲的管道噪声:先去重定向(免得 2>&1 里的 & 干扰 source 段匹配),
-    再循环去开头的 sleep / source 直到稳定,收尾清掉残留分号/空白。"""
+    再循环去开头的 sleep / source、以及任何 `echo '--- xxx ---'` 分隔,直到稳定,收尾清掉残留分号/空白。"""
     s = RE_REDIR.sub("", s)
     prev = None
     while prev != s:
         prev = s
         s = RE_SLEEP.sub("", s)
         s = RE_SRCPROF.sub("", s)
+        s = RE_ECHO_SEP.sub("", s)
     return s.strip().lstrip(";").strip()
 
 
 # ───────────────────────── 行渲染小工具 ─────────────────────────
-# 真实流里可识别的提示符前缀:shell [user@host ~]$/# 、hive>、mysql>、MariaDB [db]>。
-RE_PROMPT = re.compile(r'^(\[[^\]\n]*\][$#]|(?:hive|mysql|MariaDB \[[^\]]*\])>)(\s.*)?$')
+# 真实流里可识别的提示符前缀:shell [user@host ~]$/# 、hive>、mysql>、MariaDB [db]>、
+# hbase(main):NNN:0>、zk 的 [zk: host:2181(CONNECTED) N]、spark 的 scala>/spark-sql>。
+RE_PROMPT = re.compile(
+    r'^('
+    r'\[[^\]\n]*\][$#]'                       # shell  [user@host ~]$ / #
+    r'|(?:hive|mysql|MariaDB \[[^\]]*\])>'    # hive> / mysql> / MariaDB [db]>
+    r'|hbase\(main\):\d+:\d+>'                # hbase(main):001:0>
+    r'|\[zk:[^\]\n]*\]'                        # [zk: nodea220:2181(CONNECTED) 0]
+    r'|(?:scala|spark-sql)>'                  # scala> / spark-sql>
+    r')(\s.*)?$')
+
+# 脚本自身的控制/日志行(由 ssh_runner 的 log.info 写入 run.log)——**不进截图**(run.log 仍保留)。
+# 精确匹配「标签词 + 空格」,绝不误杀真实输出(如 zk 的 `[root1, root2, …]` 不以这些标签开头)。
+RE_CTRL_LINE = re.compile(
+    r'^\s*\[(?:OK|FAIL|X|!|skip|manual|author|xml|note|live|retry|warn)\]\s')
+# zkCli 启动时 log4j 打的环境/连接 INFO/WARN 噪声(`… [myid:…] - INFO  [main:Environment@109] - …`)
+# ——纯框架日志,教程截图不会展示;**zk 专属**(`[myid:]` 是 ZooKeeper 特有,不会误杀 MR/Hive 的
+# 有意义 INFO 进度行,如 `… INFO mapreduce.Job: map 100%`)。保留 ERROR/FATAL(可能是真问题)。
+RE_ZK_LOG = re.compile(r"\[myid:[^\]]*\]\s*-\s*(?:INFO|WARN|DEBUG|TRACE)\b")
 
 
 def _row_prompt(prom, cmd):
@@ -285,13 +308,23 @@ def _warn_if_no_output(title, lines):
 
 
 # ───────────────────────── 截图 ─────────────────────────
-def find_browser(override=None):
+def browser_candidates(override=None):
+    """返回可用浏览器列表(override 优先,否则按 BROWSERS 顺序取存在的)。
+    返回多个是为了**容错**:某浏览器的 headless 截图偶发失效(如 Edge 被更新/已有实例占用时
+    --screenshot 静默不出图),shoot() 会依次回退到下一个,直到真正产出 PNG。"""
     if override:
-        return override
-    for b in BROWSERS:
-        if os.path.exists(b):
-            return b
-    raise FileNotFoundError("找不到 Edge/Chrome,请用 --browser 指定 msedge.exe 路径")
+        return [override]
+    found = [b for b in BROWSERS if os.path.exists(b)]
+    if not found:
+        raise FileNotFoundError("找不到 Edge/Chrome,请用 --browser 指定浏览器路径")
+    return found
+
+
+def find_browser(override=None):   # 向后兼容(旧调用);取第一个候选
+    return browser_candidates(override)[0]
+
+
+_GOOD_BROWSER = None   # 记住第一个真正出图的浏览器,后续优先用它,省去每张图都试错 Edge
 
 
 def _visual_rows(plains):
@@ -324,7 +357,12 @@ def _trim_bottom(png_path):
         pass
 
 
-def shoot(html_text, png_path, browser, visual_rows):
+def shoot(html_text, png_path, browsers, visual_rows):
+    """渲染一张 PNG。browsers 可为单个路径或候选列表;依次尝试直到真正产出 PNG(容错 Edge
+    headless 偶发静默失效),并记住成功的那个(_GOOD_BROWSER)供后续优先使用。"""
+    global _GOOD_BROWSER
+    if isinstance(browsers, str):
+        browsers = [browsers]
     width = 1040
     # 窗口高度 = 内容估算 + BAND_MARGIN,**永远高于裁切坏区间上沿(~136px)**,避免整页塌成一行;
     # 渲染后用 _trim_bottom 裁掉底部多余黑边得到紧凑图。
@@ -332,30 +370,52 @@ def shoot(html_text, png_path, browser, visual_rows):
     with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False, encoding="utf-8") as f:
         f.write(html_text)
         html_path = f.name
-    png_abs = os.path.abspath(png_path)   # Edge 的 --screenshot 相对其 CWD,必须绝对路径
+    png_abs = os.path.abspath(png_path)   # --screenshot 相对其 CWD,必须绝对路径
     os.makedirs(os.path.dirname(png_abs), exist_ok=True)
     uri = "file:///" + html_path.replace("\\", "/")
-    udd = tempfile.mkdtemp(prefix="clzj_edge_")
-    cmd = [browser, "--headless=new", "--disable-gpu", "--hide-scrollbars",
-           "--no-first-run", "--no-default-browser-check", "--no-sandbox",
-           f"--user-data-dir={udd}", f"--force-device-scale-factor={SCALE}",
-           f"--window-size={width},{height}", f"--screenshot={png_abs}", uri]
-    p = subprocess.run(cmd, capture_output=True, text=True,
-                       encoding="utf-8", errors="replace", timeout=120)
+    # 成功过的浏览器排最前,避免每张图都先白试一次坏掉的 Edge
+    order = ([_GOOD_BROWSER] if _GOOD_BROWSER in browsers else []) + \
+            [b for b in browsers if b != _GOOD_BROWSER]
+    last_err = ""
     try:
-        os.unlink(html_path)
-    except OSError:
-        pass
-    if not os.path.exists(png_abs):
-        raise RuntimeError(f"截图失败 (rc={p.returncode}): {(p.stderr or '')[:400]}")
-    _trim_bottom(png_abs)
-    return png_abs
+        for b in order:
+            if os.path.exists(png_abs):
+                try:
+                    os.remove(png_abs)
+                except OSError:
+                    pass
+            udd = tempfile.mkdtemp(prefix="clzj_shot_")
+            cmd = [b, "--headless=new", "--disable-gpu", "--hide-scrollbars",
+                   "--no-first-run", "--no-default-browser-check", "--no-sandbox",
+                   f"--user-data-dir={udd}", f"--force-device-scale-factor={SCALE}",
+                   f"--window-size={width},{height}", f"--screenshot={png_abs}", uri]
+            try:
+                p = subprocess.run(cmd, capture_output=True, text=True,
+                                   encoding="utf-8", errors="replace", timeout=120)
+            except Exception as e:
+                last_err = f"{type(e).__name__}: {e} (browser={os.path.basename(b)})"
+                continue
+            if os.path.exists(png_abs):
+                _GOOD_BROWSER = b
+                _trim_bottom(png_abs)
+                return png_abs
+            last_err = f"rc={p.returncode} {(p.stderr or '').strip()[:200]} (browser={os.path.basename(b)})"
+    finally:
+        try:
+            os.unlink(html_path)
+        except OSError:
+            pass
+    raise RuntimeError(f"截图失败,所有浏览器均未产出 PNG。最后错误:{last_err}")
 
 
 def parse_log(log_path):
     """把 run.log 切成 [(title, [(kind,text),...]), ...],按 '### ' 分段。
     新日志里命令以「真实提示符 + 命令」形式落在普通行(out),逐行重放即可;只有
-    `>> (应答) ****`(脱敏应答)与极少数旧日志的 `>> cmd`(兜底)仍带 `>> ` 前缀。"""
+    极少数旧日志的 `>> cmd`(兜底)仍带 `>> ` 前缀。
+
+    **截图保真过滤(run.log 不动,只在这里滤)**:脚本控制/日志行(`[OK]`/`[manual]`/…)、
+    `>> (应答) ****` 注解、以及注入 echo 打出的 `--- xxx ---` 分隔横线,**一律不进截图**——
+    截图只留教程真实命令与其真实输出。"""
     sections = []
     cur_title, cur_lines = None, []
     for raw in open(log_path, encoding="utf-8"):
@@ -365,9 +425,11 @@ def parse_log(log_path):
                 sections.append((cur_title, cur_lines))
             cur_title, cur_lines = line[4:].strip(), []
         elif line.startswith(">> (应答) "):
-            cur_lines.append(("ans", line[3:]))
+            continue                                  # 应答注解不进截图(真终端也不回显密码)
         elif line.startswith(">> "):
             cur_lines.append(("cmd", line[3:]))
+        elif RE_CTRL_LINE.match(line) or RE_SEP_LINE.match(line) or RE_ZK_LOG.search(line):
+            continue                                  # 脚本控制/日志行、注入横线、zk 启动 log4j 噪声,不进截图
         else:
             if line.strip() == "" and not cur_lines:
                 continue
@@ -396,7 +458,7 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--browser")
     args = ap.parse_args()
-    browser = find_browser(args.browser)
+    browsers = browser_candidates(args.browser)   # 候选列表;shoot 依次尝试直到出图(容错坏掉的 Edge)
 
     if args.from_log:
         sections = parse_log(args.from_log)
@@ -407,10 +469,10 @@ def main():
             repl = detect_repl(lines)
             if repl:
                 rows, plains = render_repl_section(lines, repl, state)
-                shoot(wrap_page(rows), png, browser, _visual_rows(plains))
+                shoot(wrap_page(rows), png, browsers, _visual_rows(plains))
             else:
                 page, plains = render_html(lines, args.prompt)
-                shoot(page, png, browser, _visual_rows(plains))
+                shoot(page, png, browsers, _visual_rows(plains))
                 _warn_if_no_output(title, lines)
             eprint(f"  渲染 {png}")
             n += 1
@@ -423,7 +485,7 @@ def main():
             for ln in args.output_text.splitlines():
                 lines.append(("out", ln))
         page, plains = render_html(lines, args.prompt)
-        shoot(page, args.out, browser, _visual_rows(plains))
+        shoot(page, args.out, browsers, _visual_rows(plains))
         eprint(f"渲染 {args.out}")
 
 

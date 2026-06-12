@@ -46,8 +46,8 @@ H3  → 【常见问题】下的具体条目  例:"1. 在 Hive 执行 show table
   "idx": 3,
   "text": "创建员工表,注意替换为你的学号后3位。",  // 步骤说明(排版时作为图注/段落)
   "code": "create table emp你的学号后3位(...);",   // 已剥掉 hive>/mysql>/$ 提示符的可执行命令
-  "lang": "shell|hiveql|sql|xml|interactive|null", // 见下「语言判定」
-  "repl": "hive|mysql|spark|null",              // 命令要送进哪个交互会话(由提示符前缀推出)
+  "lang": "shell|hiveql|sql|xml|zk|hbase|scala|interactive|null", // 见下「语言判定」
+  "repl": "hive|mysql|hbase|zk|spark|null",     // 命令要送进哪个交互会话(由提示符前缀或上下文推出)
   "target_node": "nodea",                       // 说明里点名的节点;否则继承上一步
   "interactive": true,                          // lang==interactive 时为 true
   "kind": "auto|author|manual|note",            // 见下「kind 判定」
@@ -56,8 +56,16 @@ H3  → 【常见问题】下的具体条目  例:"1. 在 Hive 执行 show table
 }
 ```
 
-**提示符剥离**:代码块里 `hive> ` / `mysql> ` / `MariaDB [..]> ` / `$ ` / `# ` 等前缀会被剥掉,
-存进 `code` 的是「干净可执行」的命令,并据前缀推出 `repl`(送进对应交互会话执行)。
+**提示符剥离**:代码块里 `hive> ` / `mysql> ` / `MariaDB [..]> ` / `hbase(main):NNN:0> ` /
+`[zk: host:2181(CONNECTED) N] ` / `scala> ` / `$ ` / `# ` 等前缀会被剥掉,存进 `code` 的是
+「干净可执行」的命令,并据前缀推出 `repl`(送进对应交互会话执行)。
+
+**裸命令块的 REPL 归属**(教程常给不带提示符的裸命令,如单独的 `create -e /x`、`get /x`、`list`):
+按「子任务级上下文 + 动词白名单」判定——某代码块含 `zkCli.sh` / `hbase shell` / `spark-shell` 等
+**启动命令**即为该子任务建立「活跃 REPL 上下文」;之后无提示符的块,若**每非空行首词都属于该 REPL 的
+命令动词**(zk:`create/get/set/delete/ls/stat/getAcl/sync/addauth…`;hbase:`create/list/scan/put/get/
+disable/drop…`)且不含 shell 元字符(`|`/`&&`/`>` 等),则判为送进该 REPL。**保守**:无上下文时绝不把
+裸 `ls /`/`get` 误判成 REPL(降低把 shell 命令误塞进 zkCli 的概率)。判不准时 Claude 可手改 `plan.json` 的 `repl`。
 
 **「期望结果」路由**:某代码块前的文字若含「期望结果/结果如下/运行结果」等,则该代码块是**预期输出**,
 放进 `expect_output`、`code` 留空——这类是「**要求你自己写 HiveQL**」的题目(如 P4 后 7 问),
