@@ -33,7 +33,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from _common import load_config, apply_sid, eprint  # noqa: E402
 
-# 样例排版指纹(实测自 风格参考.docx,固化进生成器——脱离样例文件也能复现,见 references/report-template.md)
+# 样例排版指纹(固化进生成器——无需额外样例文件即可复现,见 references/report-template.md)
 CODE_FILL = "FFF2CC"        # 淡金
 CODE_BORDER = "000000"      # 代码块边框=细黑 sz4 #000000(匹配样例,非旧的淡金 D9C27A)
 CODE_FONT = "Consolas"
