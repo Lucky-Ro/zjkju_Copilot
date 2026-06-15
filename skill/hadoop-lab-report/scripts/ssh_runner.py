@@ -150,6 +150,17 @@ def build_playbook(cmd: str):
             (r"Are you sure you want to continue connecting", "yes", False),
             (r"password:", "@node.hadoop_password", True),
         ]
+    elif re.match(r"^\s*su\b", low):
+        # `su` 切到其它用户/root 会弹 `Password:`(`su 到本会话用户`已在 cmd_run 当冗余跳过)。
+        # 喂目标用户密码,避免卡在密码提示上 360s:`su <user>` 用该用户密码,`su`/`su -`/`su root` 用 root 密码;
+        # 配置缺该密码时喂空 → **快速认证失败**(rc≠0),也好过无声卡死。
+        mt = re.match(r"^\s*su\s+(?:-\s+|-l\s+|--login\s+)?([a-z_]\w*)?", low)
+        target = mt.group(1) if mt else None
+        pwref = "@node.hadoop_password" if (target and target != "root") else "@node.root_password"
+        pb = [(r"[Pp]assword\s*:", pwref, True)]
+    elif re.search(r"\b(?:yum|dnf)\s+(?:install|update|upgrade|reinstall|groupinstall|remove|erase)\b", low):
+        # 包管理器没带 `-y` 时会停在 `Is this ok [y/d/N]:` 等确认 → 自动答 y,免得卡死(教程偶尔漏 -y)。
+        pb = [(r"Is this ok \[y/d/N\]|Is this ok \[y/N\]", "y", False)]
     return pb
 
 
@@ -811,8 +822,22 @@ def cmd_run(cfg, log, plan, rd, continue_on_error=False, repl_batch=False):
                     log.info("[xml] 配置文件内容:请由 Claude 用 heredoc 写入目标文件,不在此自动执行。")
                     st["steps"][sid_key] = "xml-pending"
                     continue
+                if kind not in RUNNABLE:   # 只有 auto 可执行;未知 kind(如手改成 skip)一律跳过,不漏到执行
+                    log.info(f"[note] kind={kind} 非可执行,跳过 {sid_key}。")
+                    st["steps"][sid_key] = "note"
+                    continue
 
                 code = apply_sid(step["code"], sid3)  # 学号占位替换
+                # 冗余 `su <本会话用户>` 跳过:本引擎是**以该用户 SSH 登录**的(已是 hadoop),`su hadoop`
+                # 既多余、又会弹 `Password:` 卡住、还起嵌套子 shell 破坏会话。当 note 跳过,不下发。
+                node_obj = node_by_name(cfg, step.get("target_node")) or cfg["nodes"][0]
+                m_su = re.match(r"^\s*su\s+(?:-\s+|-l\s+|--login\s+)?([A-Za-z_]\w*)\s*$", code)
+                if m_su and m_su.group(1) == str(node_obj.get("username", "")):
+                    log.info(f"[note] 跳过 `{code.strip()}`:本会话已以 {node_obj.get('username')} 用户登录,"
+                             f"`su` 到同一用户冗余(且会卡在密码提示/起嵌套 shell)。")
+                    st["steps"][sid_key] = "note"
+                    save_state(rd, st)
+                    continue
                 sh = shell_for(step.get("target_node") or cfg["nodes"][0]["name"])
                 if step.get("repl") and not repl_batch:
                     # 真交互:进入会话(首块捕获 launch+banner 进本段)→ 逐句喂入本块语句。
