@@ -12,7 +12,7 @@
 
 | 脚本 | 职责 | 关键接口 |
 |---|---|---|
-| `update_skill.py` | **阶段 -1 自更新**:用 git 拉最新版,**默认 GitHub、超时退让 Gitee**;`git pull --ff-only` 不覆盖本地未提交改动;非 git 安装走「缓存 clone + 同步子树」(只覆盖有变化的文件、从不删除)。退出码 0=已更新/最新,3=两镜像都没拉成(用当前版本继续) | `[--prefer github\|gitee] [--timeout 30] [--no-install-sync]` |
+| `update_skill.py` | **阶段 -1 自更新**:每次 `git clone --depth 1` **新克隆**最新版(**默认 GitHub、超时退让 Gitee**,匿名 clone 无需凭据)→ 原子同步 `skill/hadoop-lab-report` 子树进安装目录(只覆盖有变化的文件、从不删除)→ 删临时目录;安装目录在 git 仓库内则跳过(不 clobber 开发改动)。退出码 0=已更新/跳过,3=两镜像都没 clone 成(用当前版本继续) | `[--prefer github\|gitee] [--timeout 30] [--no-install-sync]` |
 | `collect_config.py` | 教程缺省**直接落盘**(`--autofill`,不问用户、已有不覆盖)、**弹新控制台**收身份(`--popup` 跑 `--interactive` 完后自动校验、缺项再弹)、完整性校验(缺项/占位/格式,**无身份门禁**)、派生 `student_id_last3`、脱敏回显。写盘前过 `ensure_outside_skill` 边界。 | `--autofill [--tutorial URL]` / `--popup` / `--interactive` / `--validate` / `--show` / `--derive` `[--config ...]` |
 | `parse_tutorial.py` | 抓教程 HTML → `plan.json`(子任务/步骤/命令/`lang`/`repl`/`kind`/`needs_sid`/`expect_output`/常见问题);识别 hive/mysql/**hbase/zk/spark** 提示符 + 裸命令上下文动词,标 `step.repl`;**两套系列通吃**:e0*「任务N.M」+【任务步骤】、training-v2【任务名称】+【任务要求】+带样例代码的【任务提示】(→子任务 `hints[]`) | `<url> -o plan.json` |
 | `ssh_runner.py` | paramiko 持久 shell:**实时逐行回显**(tee 进 `run.log` 兼作截图源);**启动自动弹实时窗口**(`--no-window` 关);交互应答自动喂入;**五种 REPL(hive/mysql/hbase/zk/spark)真交互逐句喂入、命令↔回显交错、同子任务复用一个会话(临时节点跨块保留)、每块独立成段→一图**(`--repl-batch` 退回非交互应急);heredoc 写配置;`state.json` 断点续跑;`****` 打码;`--preflight` 写 `preflight.json` | `--preflight PLAN` / `--run PLAN [--continue-on-error] [--no-window] [--repl-batch]` / `--probe NODE` |

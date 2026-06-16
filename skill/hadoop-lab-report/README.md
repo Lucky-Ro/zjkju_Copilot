@@ -13,7 +13,7 @@
 给定一个教程网址(如 `https://heisun.xyz/docs/hadoop-e/hadoop-e04/` 或
 `https://heisun.xyz/docs/hadoop-training-v2/hadoop-training03/`),它会:
 
-0. **运行前先自更新**(`update_skill.py`):用 git 把本 skill 拉到最新版,**默认 GitHub、网络超时自动退让 Gitee**,免得用了过期版本。
+0. **运行前先自更新**(`update_skill.py`):每次用 `git clone` 把本 skill 新克隆到最新版,**默认 GitHub、网络超时自动退让 Gitee**(匿名 clone,无需凭据),免得用了过期版本。
 1. **解析教程** → 子任务、有序步骤、命令、HiveQL/SQL/XML、交互应答、常见问题(`parse_tutorial.py`);**两套系列通吃**——training-v2 的【任务名称】/【任务要求】/带样例代码的【任务提示】也能解析。
 2. **生成执行计划**,区分「能 SSH 自动跑」(`auto`)/「要自己写命令」(`author`,如 Hive 的 7 条查询)/「要 GUI/人工」(`manual`,如 VirtualBox 克隆、网卡、NameNode `:9870` 网页)。
 3. **SSH 真跑**(`ssh_runner.py`,paramiko 持久会话):**实时逐行回显**(`>> 命令` + 原样输出),完整写进 `run.log`;交互命令(`mysql_secure_installation`/`hive`/`ssh-keygen`…)按教程缺省值自动喂答案;改配置用 heredoc 不用 vi;断点续跑;**密码全程打码 `****`**。
@@ -89,7 +89,7 @@ hadoop-lab-report/
 │   └── FinalShellBackGround.png  # 截图默认 FinalShell 终端壁纸(深蓝墨色纹理)
 └── scripts/
     ├── _common.py                # 共享:配置/打码/路径边界(ensure_outside_skill)/学号(URL→eNN/tNN)/UTF-8
-    ├── update_skill.py           # 阶段 -1 自更新:git 拉最新版(GitHub→Gitee 退让,ff-only 安全)
+    ├── update_skill.py           # 阶段 -1 自更新:每次 git clone 最新版(GitHub→Gitee 退让,匿名无凭据)
     ├── collect_config.py         # 教程缺省落盘(--autofill)/弹窗收身份(--popup)/校验(--validate)/脱敏回显
     ├── parse_tutorial.py         # 教程 URL → plan.json(e0* 与 training-v2 两套系列)
     ├── ssh_runner.py             # SSH 执行引擎(实时回显/交互喂答/断点续跑/打码)
