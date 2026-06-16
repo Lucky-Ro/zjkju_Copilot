@@ -29,6 +29,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL_ROOT = os.path.dirname(HERE)                 # 安装目录根(.../hadoop-lab-report)
@@ -120,25 +121,24 @@ def pull_repo(repo: str, prefer: str, timeout: int) -> bool:
 
 
 # ───────────────────────── (B) 非 git 安装:缓存 clone + 同步子树 ─────────────────────────
-def cache_clone_or_pull(prefer: str, timeout: int) -> bool:
-    """在 CACHE_DIR 维护一个仓库 clone:已存在则 ff-only 拉取,否则 clone。GitHub→Gitee 退让。"""
-    parent = os.path.dirname(CACHE_DIR)
-    os.makedirs(parent, exist_ok=True)
-    if os.path.exists(os.path.join(CACHE_DIR, ".git")):
-        branch = current_branch(CACHE_DIR, timeout)
-        for label, url in remotes_in_order(prefer):
-            eprint(f"[update] 更新本地缓存仓库(从 {label}, ff-only)…")
-            rc, _, err = git(["pull", "--ff-only", url, branch], CACHE_DIR, timeout)
-            if rc == 0:
-                return True
-            if rc == 127:
-                eprint("[update] git 缺失,无法自更新。")
-                return False
-            eprint(f"[update] {label} 缓存拉取失败({'超时' if rc == 124 else 'rc=%d' % rc}),换镜像…")
-        return False
-    # 还没有缓存 → clone(浅克隆省流量)
+def _cache_pull(prefer: str, timeout: int) -> bool:
+    branch = current_branch(CACHE_DIR, timeout)
     for label, url in remotes_in_order(prefer):
-        eprint(f"[update] 首次从 {label} 克隆仓库到缓存…")
+        eprint(f"[update] 更新本地缓存仓库(从 {label}, ff-only)…")
+        rc, _, err = git(["pull", "--ff-only", url, branch], CACHE_DIR, timeout)
+        if rc == 0:
+            return True
+        if rc == 127:
+            eprint("[update] git 缺失,无法自更新。")
+            return False
+        eprint(f"[update] {label} 缓存拉取失败({'超时' if rc == 124 else 'rc=%d' % rc}),换镜像…")
+    return False
+
+
+def _cache_clone(prefer: str, timeout: int) -> bool:
+    parent = os.path.dirname(CACHE_DIR)
+    for label, url in remotes_in_order(prefer):
+        eprint(f"[update] 从 {label} 克隆仓库到缓存…")
         if os.path.isdir(CACHE_DIR):
             shutil.rmtree(CACHE_DIR, ignore_errors=True)
         rc, _, err = git(["clone", "--depth", "1", url, CACHE_DIR], parent, timeout)
@@ -151,9 +151,42 @@ def cache_clone_or_pull(prefer: str, timeout: int) -> bool:
     return False
 
 
+def cache_clone_or_pull(prefer: str, timeout: int) -> bool:
+    """在 CACHE_DIR 维护一个仓库 clone:已有且**结构完好** → ff-only 拉取(GitHub→Gitee 退让);
+    缓存损坏 → 删除重新 clone(自愈);没有缓存 → clone。GitHub→Gitee 退让贯穿始终。"""
+    os.makedirs(os.path.dirname(CACHE_DIR), exist_ok=True)
+    if os.path.exists(os.path.join(CACHE_DIR, ".git")):
+        # 廉价**本地**完整性检查(不联网):能解析 HEAD = 结构完好 → 只拉取(**网络瞬断也保留好缓存**,
+        # 不误删);解析失败 = 缓存损坏(上次 clone/pull 中断等)→ 删除后重新 clone,免得永久卡死。
+        rc, _, _ = git(["rev-parse", "HEAD"], CACHE_DIR, timeout=10)
+        if rc == 0:
+            return _cache_pull(prefer, timeout)
+        eprint("[update] 本地缓存仓库已损坏(无法解析 HEAD)→ 删除后重新克隆。")
+        shutil.rmtree(CACHE_DIR, ignore_errors=True)
+    return _cache_clone(prefer, timeout)
+
+
+def _atomic_copy(src: str, dst: str):
+    """把 src 复制到 dst,**原子落地**:先写同目录临时文件,再 `os.replace` 覆盖。
+    中断/崩溃只会留下「旧文件完整」或「新文件完整」,绝不出现写到一半的半截文件;
+    剩余文件由下次运行的 sync_tree 自动补齐。copy2 保留 mtime(供 Python 判定是否重编译 .pyc)。"""
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(dst), prefix=".tmp_upd_")
+    os.close(fd)
+    try:
+        shutil.copy2(src, tmp)
+        os.replace(tmp, dst)         # 同盘原子替换(Windows/POSIX 都支持覆盖目标)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+
 def sync_tree(src: str, dst: str) -> int:
     """把 src 子树同步进 dst:只覆盖内容确有变化的文件,从不删除 dst 里多余的文件(安全)。
-    跳过 .git/__pycache__/.gitignore。返回更新的文件数。"""
+    每个文件**原子替换**(_atomic_copy),中断不会留半截文件。跳过 .git/__pycache__/.gitignore。
+    返回更新的文件数。"""
     changed = 0
     for root, dirs, files in os.walk(src):
         dirs[:] = [d for d in dirs if d not in SKIP_NAMES]
@@ -167,7 +200,7 @@ def sync_tree(src: str, dst: str) -> int:
             if os.path.exists(t) and filecmp.cmp(s, t, shallow=False):
                 continue                     # 内容一致,免写
             os.makedirs(target_dir, exist_ok=True)
-            shutil.copy2(s, t)
+            _atomic_copy(s, t)
             changed += 1
             eprint(f"[update]   ↻ {os.path.join(rel, fn) if rel != '.' else fn}")
     return changed
