@@ -1,8 +1,15 @@
-# heisun.xyz e0* 教程页结构与解析规则
+# heisun.xyz 教程页结构与解析规则
 
-适用网址:`https://heisun.xyz/docs/hadoop-e/hadoop-eNN/`(NN = 01–07,对应 P1–P7)。
-页面是**服务端渲染的 HTML**(原始 HTML 里就有标题与代码块,无需无头浏览器),`parse_tutorial.py`
-直接 `GET` 后用 HTML 解析即可。编码为 UTF-8。
+适用两套系列(同一站点、同一解析器 `parse_tutorial.py`):
+- **hadoop-e0* 系列**:`https://heisun.xyz/docs/hadoop-e/hadoop-eNN/`(NN = 01–07,对应 P1–P7)。
+  逐步「敲命令 / 写配置 / 跑 SQL」的实操实验,运行目录 `runs/eNN/`。
+- **hadoop-training-v2 系列**:`https://heisun.xyz/docs/hadoop-training-v2/hadoop-trainingNN/`
+  (NN = 01–04,Part 1–4)。单任务页、偏「写程序 + Hive 数据分析 + 可视化」的综合作业,
+  运行目录 `runs/tNN/`(由 `_common.run_id_from_url` 映射 trainingNN→tNN,与 e0* 分开命名空间)。
+
+页面都是**服务端渲染的 HTML**(原始 HTML 里就有标题与代码块,无需无头浏览器),`parse_tutorial.py`
+直接 `GET` 后用 HTML 解析即可。编码为 UTF-8。正文容器:e0* 多为 `<article>`,training 为
+`<div class="content">`;`content_root()` 优先取这类紧致容器(避开 `<main>` 里的侧栏/页尾导航)。
 
 ## 标题层级(以 e04 实测为准)
 
@@ -87,6 +94,36 @@ HTML 里代码块形如 `<pre><code class="language-xxx">`。
 步骤文字 / 代码 / 表名 / 主机名里出现「学号后3位 / 替换为你学号后3位 / nodea+你学号后3位」等,
 解析阶段**保留原文 + 打标 `needs_sid: true`**;执行与排版阶段统一替换为 `student_id_last3`。
 替换细则见 `report-template.md`。
+
+## hadoop-training-v2 系列差异(Part 1–4)
+
+training 系列是**单任务页**,小节命名与 e0* 略不同,解析器已统一兼容(按【】文本归类):
+
+```
+H1  → 页标题            例:"Part 4 - Hive实战实践2"        → 报告「实验名称」(H1 在紧致正文容器外,有兜底)
+H2  → 【版本】           版本/修订表,忽略(出现在【任务名称】前,cur 仍空,自动跳过)
+H2  → 【任务名称】任务N - 标题   ← 子任务开始(对应 e0* 的裸「任务N.M」)。subtask_id 取「任务N」,标题取其后
+H2  → 【任务目的】【任务环境】【任务说明】   → purpose / environment / description(同 e0*)
+H2  → 【任务要求】       → steps(本系列的「可操作小节」,内容多为编号要求文字,常无可执行命令 → note/author)
+H2  → 【任务提示】       → hints(本系列特有):其下每个
+       H3 →  【提示N - …】   一条提示,正文进 hint.text、样例代码块(SQL/Java)逐块进 hint.codes[]
+```
+
+子任务额外字段:
+```jsonc
+{
+  "subtask_id": "3", "title": "在电影库中查找…",
+  "steps": [ /* 由【任务要求】构建,多为 note/author */ ],
+  "hints": [               // ← training 特有:供 author 阶段参考改写的样例
+    { "title": "提示2 - 使用 group by 分组统计次数", "text": "…", "codes": ["select * from film_actor", "select tit as `电影名`,count(actor) …"] }
+  ]
+}
+```
+
+**怎么用**:training 任务多是「自己写程序 + 写 HiveQL + 出可视化图表」。`【任务要求】`告诉你要做什么、
+`【任务提示】`给样例 SQL/Java。Claude 据此**生成实际的 HiveQL**(author 步骤),通过 hive REPL 真跑、截图;
+Java 数据清洗与 Excel 可视化属 author/manual(由你写代码或提示用户用 GUI 完成,图放 `runs/tNN/manual/`)。
+学号/演员分配这类「因人而异」的输入,以 `lab_config.json` 与用户确认为准。
 
 ## auto / manual 判定(阶段 2 用)
 

@@ -113,11 +113,19 @@ def make_masker(secrets: list[str]):
 
 
 def run_id_from_url(url: str) -> str:
-    """https://heisun.xyz/docs/hadoop-e/hadoop-e04/  ->  e04"""
-    m = re.search(r"hadoop-(e\d{2})", url or "")
+    """教程网址 → 运行目录 id。
+    - .../hadoop-e/hadoop-e04/                  → e04
+    - .../hadoop-training-v2/hadoop-training04/ → t04
+      (training 系列单独命名空间 tNN,不与 e0* 系列撞 runs/ 目录)
+    """
+    u = url or ""
+    m = re.search(r"hadoop-training(\d{2})", u)
+    if m:
+        return "t" + m.group(1)
+    m = re.search(r"hadoop-(e\d{2})", u)
     if m:
         return m.group(1)
-    m = re.search(r"(e\d{2})", url or "")
+    m = re.search(r"(e\d{2})", u)
     return m.group(1) if m else "eXX"
 
 

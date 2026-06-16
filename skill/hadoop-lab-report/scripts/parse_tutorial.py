@@ -23,7 +23,11 @@ from _common import eprint  # noqa: E402
 
 BLOCK_TAGS = {"h1", "h2", "h3", "h4", "p", "pre", "li", "table"}
 
-# 区块标题(【...】)到 plan 字段的映射
+# 区块标题(【...】)到 plan 字段的映射。
+# 两套系列共用一张表(按 H2 文本是否被【】包裹归类,不硬编死名字):
+#   - hadoop-e0* 系列:子任务用裸 H2「任务N.M」开头,可执行小节叫【任务步骤】。
+#   - hadoop-training-v2 系列:子任务用【任务名称】开头,可执行小节叫【任务要求】,
+#     另有带样例代码(SQL/Java)的【任务提示】。
 SECTION_FIELD = {
     "任务目的": "purpose",
     "任务环境": "environment",
@@ -31,6 +35,8 @@ SECTION_FIELD = {
     "任务说明": "description",
     "任务内容": "description",
     "任务步骤": "steps",
+    "任务要求": "steps",       # training 系列:可操作小节
+    "任务提示": "hints",       # training 系列:带样例代码的提示(SQL/Java),供 author 参考
     "常见问题": "common_issues",
 }
 
@@ -68,12 +74,19 @@ def fetch(url: str) -> str:
 
 
 def content_root(soup: BeautifulSoup):
-    for sel in ("article", "main"):
-        el = soup.find(sel)
-        if el:
-            return el
-    el = soup.find("div", class_=re.compile(r"markdown|theme-doc|content", re.I))
-    return el or soup.body or soup
+    el = soup.find("article")
+    if el:
+        return el
+    # 紧致正文容器优先于 <main>:training 系列正文在 <div class="content">,而其 <main> 还把
+    # 侧栏/页尾导航(重复的【版本】【任务名称】… li、Part1-4 目录)圈在内,会污染解析。
+    # 也兼容 Docusaurus 的 .theme-doc-markdown / .markdown 与通用 .prose。
+    el = soup.find("div", class_="content")
+    if el:
+        return el
+    el = soup.find("div", class_=re.compile(r"markdown|theme-doc|prose", re.I))
+    if el:
+        return el
+    return soup.find("main") or soup.body or soup
 
 
 def walk_blocks(node):
@@ -306,6 +319,7 @@ def parse(url: str) -> dict:
     cur = None          # 当前子任务
     cur_field = None    # 当前区块字段名
     cur_issue = None    # 当前常见问题条目
+    cur_hint = None     # 当前【任务提示】下的提示条目(training 系列)
     section_buf = []    # 累积当前区块的 block 元素(用于 steps)
 
     def close_field():
@@ -321,23 +335,30 @@ def parse(url: str) -> dict:
             title = txt
             continue
         if name == "h2":
-            inner = re.match(r"^【(.+?)】", txt)
-            if re.match(r"^任务\s*\d+(\.\d+)*", txt):
+            inner = re.match(r"^【(.+?)】\s*(.*)$", txt, re.S)
+            inner_key = inner.group(1).strip() if inner else None
+            inner_rest = inner.group(2).strip() if inner else ""
+            # 子任务开始:e0* 系列是裸「任务N.M」H2;training 系列是【任务名称】任务N - 标题。
+            bare_task = (inner is None) and bool(re.match(r"^任务\s*\d+(\.\d+)*", txt))
+            named_task = inner_key == "任务名称"
+            if bare_task or named_task:
                 close_field()
                 cur_field = None
                 cur_issue = None
-                m = re.match(r"^任务\s*([\d.]+)\s*[-—:：]*\s*(.*)$", txt)
-                sid_ = m.group(1) if m else txt
+                cur_hint = None
+                decl = inner_rest if named_task else txt
+                m = re.match(r"^任务\s*([\d.]+)\s*[-—:：]*\s*(.*)$", decl)
+                sid_ = m.group(1) if m else decl
                 ttl = (m.group(2) if m else "").strip()
                 cur = {"subtask_id": sid_, "title": ttl, "purpose": "",
                        "environment": "", "resources": "", "description": "",
-                       "steps": [], "common_issues": []}
+                       "steps": [], "hints": [], "common_issues": []}
                 subtasks.append(cur)
-            elif inner and cur is not None:
+            elif inner_key and cur is not None:
                 close_field()
-                key = inner.group(1).strip()
-                cur_field = SECTION_FIELD.get(key)
+                cur_field = SECTION_FIELD.get(inner_key)
                 cur_issue = None
+                cur_hint = None
             else:
                 close_field()
                 cur_field = None
@@ -355,6 +376,23 @@ def parse(url: str) -> dict:
                 else:
                     cur_issue["fix"] = (cur_issue["fix"] + " " + txt).strip()
             continue
+        if cur_field == "hints":
+            # training 系列【任务提示】:每个 H3「【提示N - …】」是一条提示,其下文字进 text、
+            # 代码块(样例 SQL/Java)逐块进 codes,供 author 阶段参考改写。
+            if name == "h3":
+                cur_hint = {"title": re.sub(r"^【|】$", "", txt).strip(), "text": "", "codes": []}
+                cur["hints"].append(cur_hint)
+            elif cur_hint is not None:
+                if name == "pre":
+                    code, _ = code_of(b)
+                    if code.strip():
+                        cur_hint["codes"].append(code)
+                else:
+                    cur_hint["text"] = (cur_hint["text"] + " " + txt).strip()
+            elif name != "pre" and txt.strip():     # H3 之前的引导文字 → 匿名提示条目
+                cur_hint = {"title": "", "text": txt, "codes": []}
+                cur["hints"].append(cur_hint)
+            continue
         if cur_field == "steps":
             section_buf.append(b)
             continue
@@ -365,6 +403,13 @@ def parse(url: str) -> dict:
             else:
                 cur[cur_field] = (cur[cur_field] + " " + txt).strip()
     close_field()
+
+    # 标题兜底:H1 常在紧致正文容器(article / div.content)之外,blocks 里取不到时
+    # 退到整页第一个 H1(报告「实验名称」靠它)。
+    if not title:
+        h1 = soup.find("h1")
+        if h1:
+            title = text_of(h1)
 
     return {"url": url, "title": title, "subtasks": subtasks}
 
@@ -377,8 +422,9 @@ def summarize(plan: dict):
     kinds = Counter(st["kind"] for st in allst)
     nsid = sum(1 for st in allst if st["needs_sid"])
     nissue = sum(len(s["common_issues"]) for s in plan["subtasks"])
+    nhint = sum(len(s.get("hints", [])) for s in plan["subtasks"])
     eprint(f"标题: {plan['title']}")
-    eprint(f"子任务: {nsub}  步骤: {nstep}  含学号占位: {nsid}  常见问题: {nissue}")
+    eprint(f"子任务: {nsub}  步骤: {nstep}  含学号占位: {nsid}  常见问题: {nissue}  提示: {nhint}")
     eprint(f"步骤类型: auto={kinds['auto']} author(需自己写)={kinds['author']} "
            f"manual(GUI/人工)={kinds['manual']} note={kinds['note']}")
     for s in plan["subtasks"]:

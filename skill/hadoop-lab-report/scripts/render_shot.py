@@ -2,8 +2,11 @@
 # -*- coding: utf-8 -*-
 """把无头 SSH 终端的**真实输出**忠实重放成 **FinalShell 默认风格** 的终端截图 PNG(HTML + 无头 Edge)。
 
-风格:纯黑底、白色等宽字、右侧一条淡淡的滚动条;**没有** macOS 窗框 /
-红绿灯圆点 / 语法高亮——看起来就像在 FinalShell 里随手拖拽框选的截图,不疏离。
+风格:白色等宽字、右侧一条淡淡的滚动条;**没有** macOS 窗框 / 红绿灯圆点 / 语法高亮——
+看起来就像在 FinalShell 里随手拖拽框选的截图,不疏离。
+**背景默认叠 skill 自带的 FinalShell 壁纸**(深蓝墨色纹理,assets/FinalShellBackGround.png):
+先在纯黑底上渲染+裁切,再用亮度当 alpha 把文字浮到壁纸上(黑底透出壁纸、白字压在上面)。
+用户明确要**黑底白字**终端时,加 `--black-bg` 退回纯黑底;`--bg-image PATH` 可换自定义壁纸。
 
 **提示符不再伪造:** `ssh_runner.py` 已开 PTY 回显并用真实 hostname 的 PS1,命令以「真实提示符 +
 命令」形式落进 run.log(`[hadoop@<真实hostname> ~]$ cmd`)。本脚本**逐行重放该真实流**,只对可识别的
@@ -48,6 +51,9 @@ BROWSERS = [
     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
 ]
 DEFAULT_PROMPT = "[hadoop@node ~]$"
+# skill 自带的 FinalShell 终端壁纸(深蓝墨色纹理);截图默认叠在它上面,像 FinalShell 设了背景图。
+# 用户要纯黑底白字终端时,render_shot.py 加 --black-bg 即退回纯黑(见 main)。
+ASSET_BG = os.path.join(os.path.dirname(HERE), "assets", "FinalShellBackGround.png")
 
 # ── 版式常量(整数像素,锁死 CSS 与截图高度,避免 HiDPI 半像素裁切)──
 # 之前 CSS 用 line-height:1.42 → 15px×1.42 = 21.3px(非整数),叠加 --force-device-scale-factor=2,
@@ -357,9 +363,41 @@ def _trim_bottom(png_path):
         pass
 
 
-def shoot(html_text, png_path, browsers, visual_rows):
+def _composite_over_bg(png_path, bg_path):
+    """把**黑底白字**终端图叠到 FinalShell 壁纸上(像 FinalShell 设了背景图:文字浮在壁纸上)。
+    做法:用终端图自身的**亮度当 alpha**(纯黑底≈透明、亮字≈不透明),叠到按 cover 缩放居中裁切的壁纸上;
+    因此黑色区域透出壁纸、白字稳稳压在上面,壁纸再亮也不糊字。Pillow 缺失 / 壁纸缺失 → 跳过(保留纯黑底),不报错。"""
+    try:
+        from PIL import Image
+    except Exception:
+        eprint("  [warn] 未装 Pillow,无法合成壁纸背景,保留纯黑底(pip install pillow 可启用)。")
+        return
+    if not bg_path or not os.path.exists(bg_path):
+        eprint(f"  [warn] 找不到背景壁纸 {bg_path},保留纯黑底。")
+        return
+    try:
+        term = Image.open(png_path).convert("RGB")
+        w, h = term.size
+        bg = Image.open(bg_path).convert("RGB")
+        bw, bh = bg.size
+        scale = max(w / bw, h / bh)                       # cover:等比放大到填满终端尺寸
+        nw, nh = max(w, round(bw * scale)), max(h, round(bh * scale))
+        bg = bg.resize((nw, nh), Image.LANCZOS)
+        left, top = (nw - w) // 2, (nh - h) // 2
+        bg = bg.crop((left, top, left + w, top + h))      # 居中裁到终端尺寸
+        fg = term.convert("RGBA")
+        fg.putalpha(term.convert("L"))                    # 亮度→alpha:黑底→透、白字→实
+        out = bg.convert("RGBA")
+        out.alpha_composite(fg)
+        out.convert("RGB").save(png_path)
+    except Exception as e:
+        eprint(f"  [warn] 合成壁纸失败({type(e).__name__}: {e}),保留纯黑底。")
+
+
+def shoot(html_text, png_path, browsers, visual_rows, bg_image=None):
     """渲染一张 PNG。browsers 可为单个路径或候选列表;依次尝试直到真正产出 PNG(容错 Edge
-    headless 偶发静默失效),并记住成功的那个(_GOOD_BROWSER)供后续优先使用。"""
+    headless 偶发静默失效),并记住成功的那个(_GOOD_BROWSER)供后续优先使用。
+    bg_image 非空 → 裁切后再把终端叠到该壁纸上(默认 FinalShell 壁纸;--black-bg 时为 None=纯黑底)。"""
     global _GOOD_BROWSER
     if isinstance(browsers, str):
         browsers = [browsers]
@@ -397,7 +435,9 @@ def shoot(html_text, png_path, browsers, visual_rows):
                 continue
             if os.path.exists(png_abs):
                 _GOOD_BROWSER = b
-                _trim_bottom(png_abs)
+                _trim_bottom(png_abs)            # 先在纯黑底上裁掉底部多余黑边(裁切逻辑不受壁纸干扰)
+                if bg_image:                     # 再叠 FinalShell 壁纸(--black-bg 时 bg_image=None,保留纯黑底)
+                    _composite_over_bg(png_abs, bg_image)
                 return png_abs
             last_err = f"rc={p.returncode} {(p.stderr or '').strip()[:200]} (browser={os.path.basename(b)})"
     finally:
@@ -457,8 +497,15 @@ def main():
                          "如 \"[hadoop@nodeaNNN ~]$\";新日志的提示符来自真实流,无需设置")
     ap.add_argument("--out", required=True)
     ap.add_argument("--browser")
+    ap.add_argument("--bg-image", default=None,
+                    help="终端背景壁纸路径;默认用 skill 自带的 FinalShell 壁纸")
+    ap.add_argument("--black-bg", action="store_true",
+                    help="改用纯黑底白字终端(不叠壁纸);用户明确要黑底白字时用")
     args = ap.parse_args()
     browsers = browser_candidates(args.browser)   # 候选列表;shoot 依次尝试直到出图(容错坏掉的 Edge)
+    # 背景:默认叠 FinalShell 壁纸;--black-bg 退回纯黑底;--bg-image 自定义壁纸
+    bg = None if args.black_bg else (args.bg_image or ASSET_BG)
+    eprint(f"[bg] {'纯黑底白字(--black-bg)' if bg is None else '叠 FinalShell 壁纸: ' + bg}")
 
     if args.from_log:
         sections = parse_log(args.from_log)
@@ -469,10 +516,10 @@ def main():
             repl = detect_repl(lines)
             if repl:
                 rows, plains = render_repl_section(lines, repl, state)
-                shoot(wrap_page(rows), png, browsers, _visual_rows(plains))
+                shoot(wrap_page(rows), png, browsers, _visual_rows(plains), bg_image=bg)
             else:
                 page, plains = render_html(lines, args.prompt)
-                shoot(page, png, browsers, _visual_rows(plains))
+                shoot(page, png, browsers, _visual_rows(plains), bg_image=bg)
                 _warn_if_no_output(title, lines)
             eprint(f"  渲染 {png}")
             n += 1
@@ -485,7 +532,7 @@ def main():
             for ln in args.output_text.splitlines():
                 lines.append(("out", ln))
         page, plains = render_html(lines, args.prompt)
-        shoot(page, args.out, browsers, _visual_rows(plains))
+        shoot(page, args.out, browsers, _visual_rows(plains), bg_image=bg)
         eprint(f"渲染 {args.out}")
 
 

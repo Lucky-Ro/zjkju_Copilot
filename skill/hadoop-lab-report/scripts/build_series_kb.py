@@ -25,7 +25,18 @@ sys.path.insert(0, HERE)
 import parse_tutorial as P  # 复用 fetch/解析  # noqa: E402
 from _common import eprint, ensure_outside_skill  # noqa: E402
 
-BASE = "https://heisun.xyz/docs/hadoop-e/hadoop-e{:02d}/"
+# 两套系列的 URL 模板;build 时按 --series / --tutorial 自动选。
+E_BASE = "https://heisun.xyz/docs/hadoop-e/hadoop-e{:02d}/"
+TRAINING_BASE = "https://heisun.xyz/docs/hadoop-training-v2/hadoop-training{:02d}/"
+BASE = E_BASE   # 默认 e0* 系列(向后兼容:无参运行仍建 e 系列知识库)
+
+
+def pick_base(series: str, tutorial_url: str = ""):
+    """选系列 URL 模板:--series 显式优先;否则按 --tutorial 自动判断;默认 e0*。"""
+    s = (series or "auto").lower()
+    if s == "training" or (s == "auto" and "hadoop-training" in (tutorial_url or "")):
+        return TRAINING_BASE, "hadoop-training-v2"
+    return E_BASE, "hadoop-e0*"
 
 RE_IDENT = re.compile(r"identified by\s+'([^']+)'", re.I)
 RE_PWLINE = re.compile(r"(密码|password|passwd)\s*[:=是为]?\s*([A-Za-z0-9!@#._-]{3,})", re.I)
@@ -83,15 +94,20 @@ def extract(url, plan):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--max", type=int, default=7)
+    ap.add_argument("--series", default="auto", choices=["auto", "e", "training"],
+                    help="建哪套系列的知识库;auto=按 --tutorial 自动判断,默认 e0*")
+    ap.add_argument("--tutorial", default="", help="本次教程网址(供 --series auto 判断系列)")
     ap.add_argument("--out-dir", default=".", help="知识库落盘目录,默认当前项目目录(不得在 skill 内)")
     args = ap.parse_args()
+    base, series_label = pick_base(args.series, args.tutorial)
     # 路径边界:知识库含教程账号/密码/IP,只许落项目目录,绝不进 skill 目录
     out_json = ensure_outside_skill(os.path.join(args.out_dir, "series_defaults.json"))
     out_md = ensure_outside_skill(os.path.join(args.out_dir, "series-defaults.md"))
+    eprint(f"建知识库:{series_label} 系列(模板 {base})")
 
     series = []
     for nn in range(1, args.max + 1):
-        url = BASE.format(nn)
+        url = base.format(nn)
         try:
             plan = P.parse(url)
             if not plan.get("title"):
@@ -110,7 +126,7 @@ def main():
               ensure_ascii=False, indent=2)
 
     # 汇总人读 md
-    md = ["# heisun.xyz e0* 系列缺省知识库(自动抽取)",
+    md = [f"# heisun.xyz {series_label} 系列缺省知识库(自动抽取)",
           "",
           "> 由 `scripts/build_series_kb.py` 从各教程页自动抽取,落在**你的项目目录**(不进 skill 目录)。",
           "> **接任务时先读本文件**,把本次实验涉及的缺省密码 / IP / 主机名 / 端口 / 安装包对照到 `lab_config.json`",
