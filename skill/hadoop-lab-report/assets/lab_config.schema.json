@@ -17,6 +17,7 @@
         "name":        { "type": "string", "description": "学生姓名" },
         "student_id":  { "type": "string", "description": "完整学号,如 20xxxxxxxxxxx(必须本人填写,严禁照抄示例)" },
         "student_id_last3": { "type": "string", "description": "学号后3位(记作 NNN),自动从 student_id 派生,无需手填" },
+        "actor":       { "type": "string", "description": "training-v2(P2–P4)分配给本人的演员;由 find_actor.py 按 姓名+学号 在花名册 学生演员分配*.xlsx 里自动匹配写入,无需手填。e0* 系列用不到,可留空。" },
         "college":     { "type": "string", "description": "学院,如 xx学院" },
         "major_class": { "type": "string", "description": "专业班级,如 20xx级xx专业x班" },
         "instructor":  { "type": "string", "description": "指导教师" },

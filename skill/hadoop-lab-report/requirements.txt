@@ -2,8 +2,9 @@
 paramiko>=3.0        # SSH 执行引擎(交互通道、持久 shell)
 requests>=2.28       # 抓取教程页
 beautifulsoup4>=4.11 # 解析教程 HTML
-python-docx>=1.1     # 填学校 Word 模板
+python-docx>=1.1     # 填学校 Word 模板(实验报告 / 实训报告)
 Pillow>=9.0          # 截图裁切 + 默认 FinalShell 壁纸合成(缺失则回退纯黑底,不致命)
+openpyxl>=3.0        # 读花名册 学生演员分配*.xlsx,按 姓名+学号 匹配演员(find_actor.py;缺失则退让大模型人工核对)
 
 # 可选:用于把导出的报告 PDF 渲染成图做预览/自检
 # pymupdf>=1.23

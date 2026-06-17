@@ -411,6 +411,16 @@ def parse(url: str) -> dict:
         if h1:
             title = text_of(h1)
 
+    # training-v2:子任务若要求「在花名册里找到分配给你的演员」/ 用到「我的演员」,标 needs_actor=true,
+    # 供编排阶段触发 find_actor.py 把 identity.actor 查出来,再 apply_actor 代入代码/SQL/报告。
+    actor_mark = re.compile(r"分配给你的演员|学生演员分配|我的演员|你的演员")
+    for st in subtasks:
+        blob = " ".join(
+            [st.get("title", ""), st.get("purpose", ""), st.get("description", "")]
+            + [s.get("text", "") for s in st.get("steps", [])]
+            + [(h.get("title", "") + " " + h.get("text", "")) for h in st.get("hints", [])])
+        st["needs_actor"] = bool(actor_mark.search(blob))
+
     return {"url": url, "title": title, "subtasks": subtasks}
 
 
@@ -423,8 +433,10 @@ def summarize(plan: dict):
     nsid = sum(1 for st in allst if st["needs_sid"])
     nissue = sum(len(s["common_issues"]) for s in plan["subtasks"])
     nhint = sum(len(s.get("hints", [])) for s in plan["subtasks"])
+    nactor = sum(1 for s in plan["subtasks"] if s.get("needs_actor"))
     eprint(f"标题: {plan['title']}")
-    eprint(f"子任务: {nsub}  步骤: {nstep}  含学号占位: {nsid}  常见问题: {nissue}  提示: {nhint}")
+    eprint(f"子任务: {nsub}  步骤: {nstep}  含学号占位: {nsid}  含演员占位: {nactor}  "
+           f"常见问题: {nissue}  提示: {nhint}")
     eprint(f"步骤类型: auto={kinds['auto']} author(需自己写)={kinds['author']} "
            f"manual(GUI/人工)={kinds['manual']} note={kinds['note']}")
     for s in plan["subtasks"]:

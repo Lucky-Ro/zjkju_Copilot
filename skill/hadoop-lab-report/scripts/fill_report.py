@@ -32,7 +32,12 @@ from docx.oxml import OxmlElement
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from _common import load_config, apply_sid, eprint  # noqa: E402
+from _common import load_config, apply_sid, apply_actor, is_placeholder, eprint  # noqa: E402
+
+# 两套学校模板:e0* 实验报告 / training-v2 实训报告(两个都随 skill 打包,见 README)。
+ASSETS = os.path.join(os.path.dirname(HERE), "assets")
+TEMPLATE_E = os.path.join(ASSETS, "template.docx")
+TEMPLATE_TRAINING = os.path.join(ASSETS, "training_template.docx")
 
 # 样例排版指纹(固化进生成器——无需额外样例文件即可复现,见 references/report-template.md)
 CODE_FILL = "FFF2CC"        # 淡金
@@ -48,13 +53,22 @@ IMG_W = Cm(15.5)            # 截图满栏(匹配样例 ≈15.49cm),左对齐等
 BODY_SIZE = 12              # 小四,正文
 LINE = 1.0                  # 单倍行距(匹配样例;去掉 1.5 的「AI 味」留白)
 
-LABELS = {
+# e0* 实验报告:表 1 的 5 个整宽栏目。
+LABELS_E = {
     "purpose": "实验目的",
     "materials": "实验内容及实验器材",
     "process": "实验过程",
     "conclusion": "实验结论",
     "summary": "实验总结",
 }
+# training-v2 实训报告:栏目命名不同,只有「实训目的 / 实训内容及过程 / 实训总结及体会」可填
+#(「实训单位介绍」是模板自带的学校简介,不动)。standard key → 实训报告里的标签。
+LABELS_TRAINING = {
+    "purpose": "实训目的",
+    "process": "实训内容及过程",
+    "summary": "实训总结及体会",
+}
+LABELS = LABELS_E   # 向后兼容旧引用(默认 e0*)
 
 
 # ───────── oxml 小工具 ─────────
@@ -196,33 +210,36 @@ def add_image(cell, path, caption=None, tight_above=False):
 
 
 # ───────── 渲染一个栏目 ─────────
-def render_blocks(cell, blocks, sid3):
+def render_blocks(cell, blocks, sid3, actor=""):
     # 排版铁律(匹配样例):说明句(上)→ 代码块 → 截图(下),全程无图注;
     # 说明句无首行缩进、单倍行距、不加粗;只有子任务/小节标题加粗。
+    # 文字/代码统一过 学号占位(apply_sid)+ 演员占位(apply_actor,training 用)双替换。
+    def sub(s):
+        return apply_actor(apply_sid(s or "", sid3), actor)
     for b in blocks:
         t = b.get("type")
         if t == "para":
-            txt = apply_sid(b.get("text", ""), sid3)
+            txt = sub(b.get("text", ""))
             # 「任务4.2 …」这类子任务标题当作小标题:加粗、上方留白;其余正文不加粗
             is_head = bool(re.match(r"^\s*任务\s*[\d.]+", txt)) or b.get("heading")
             add_para(cell, txt, bold=is_head, indent=False,
                      space_before=10 if is_head else 0, space_after=6, line=LINE)
         elif t == "code":
-            add_code(cell, apply_sid(b.get("code", ""), sid3), b.get("lang"))
+            add_code(cell, sub(b.get("code", "")), b.get("lang"))
         elif t == "image":
             add_image(cell, b.get("path"))
         elif t == "caption":
             # 样例无图注:降级为普通说明段(不再渲染居中灰斜体小字)
-            add_para(cell, apply_sid(b.get("text", ""), sid3), indent=False,
+            add_para(cell, sub(b.get("text", "")), indent=False,
                      space_after=6, line=LINE)
         elif t == "step":
             # 说明句:普通短句,无编号、无缩进、单倍、不加粗(只有 para 的小节标题加粗)
-            head = apply_sid(b.get("text", ""), sid3)
+            head = sub(b.get("text", ""))
             add_para(cell, head, bold=False, indent=False, space_before=8, space_after=3, line=LINE)
             # 顺序:说明句(上)→ 命令(代码块)→ 截图(下),无图注。代码与其截图之间无缝。
             has_code, has_img = bool(b.get("code")), bool(b.get("image"))
             if has_code:
-                add_code(cell, apply_sid(b["code"], sid3), b.get("lang"), tight_below=has_img)
+                add_code(cell, sub(b["code"]), b.get("lang"), tight_below=has_img)
             if has_img:
                 add_image(cell, b["image"], tight_above=has_code)
 
@@ -252,9 +269,27 @@ def set_value_after(table, label, value):
     return False
 
 
-def fill_header(doc, cfg, title):
+def _set_if_real(table, label, value):
+    """只有当 value 是真实值(非空、非占位)时才覆盖,否则保留模板自带的默认值
+    (training 模板的 学院/班级/指导老师/日期 已是班级缺省,不应被占位冲掉)。"""
+    if value and not is_placeholder(value):
+        set_value_after(table, label, value)
+
+
+def fill_header(doc, cfg, title, is_training=False):
     ident = cfg["identity"]
     t0 = doc.tables[0]
+    if is_training:
+        # 实训报告表头(8 行 2 列):姓名/学号本人填;学院/班级/指导老师/日期有真值才覆盖班级缺省;
+        # 环节名称/实训单位保留模板。
+        set_value_after(t0, "姓名", ident.get("name", ""))
+        set_value_after(t0, "学号", ident.get("student_id", ""))
+        _set_if_real(t0, "学院", ident.get("college", ""))
+        _set_if_real(t0, "专业班级", ident.get("major_class", ""))
+        _set_if_real(t0, "指导老师", ident.get("instructor", ""))
+        _set_if_real(t0, "实训日期", ident.get("exam_time", ""))
+        _set_if_real(t0, "环节名称", ident.get("course_name", ""))
+        return
     set_value_after(t0, "课程名称", ident.get("course_name", "Hadoop集群部署与开发"))
     set_value_after(t0, "实验名称", title)
     set_value_after(t0, "实验地点", ident.get("location", ""))
@@ -266,8 +301,8 @@ def fill_header(doc, cfg, title):
     set_value_after(t0, "指导教师", ident.get("instructor", ""))
 
 
-def content_cell(doc, key):
-    label = LABELS[key]
+def content_cell(doc, label):
+    """在表 1 里找首段含 label 的整宽单元格(label 由调用方按系列从 LABELS_* 取)。"""
     for row in doc.tables[1].rows:
         for c in row.cells:
             if c.paragraphs and label in c.paragraphs[0].text:
@@ -314,7 +349,9 @@ def auto_content(plan, shots_dir, state):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="lab_config.json")
-    ap.add_argument("--template", help="空白模板,从零生成")
+    ap.add_argument("--series", default="auto", choices=["auto", "e", "training"],
+                    help="auto=按 tutorial_url 自动判系列(含 hadoop-training→实训报告,否则 e0* 实验报告)")
+    ap.add_argument("--template", help="空白模板,从零生成(不给则按系列自动选 template.docx / training_template.docx)")
     ap.add_argument("--into", help="在【现有报告】基础上续写:保留已填内容(如4.1),实验过程追加、结论/总结替换,表头不动")
     ap.add_argument("--content")
     ap.add_argument("--auto", action="store_true")
@@ -326,8 +363,14 @@ def main():
 
     cfg = load_config(args.config)
     sid3 = cfg["identity"].get("student_id_last3", "")
+    actor = cfg["identity"].get("actor", "")
     plan = json.load(open(args.plan, encoding="utf-8")) if args.plan else None
     title = (plan or {}).get("title") or "实验报告"
+
+    # 系列:auto 按 tutorial_url 判(含 hadoop-training → 实训报告);决定标签集与默认模板。
+    is_training = args.series == "training" or (
+        args.series == "auto" and "hadoop-training" in str(cfg.get("tutorial_url", "")))
+    labels = LABELS_TRAINING if is_training else LABELS_E
 
     if args.content:
         content = json.load(open(args.content, encoding="utf-8"))
@@ -338,29 +381,32 @@ def main():
         eprint("需要 --content report.json 或 --auto(配合 --plan)")
         sys.exit(2)
 
-    base = args.into or args.template
-    if not base:
-        eprint("需要 --template(从零)或 --into(在现有报告上续写)其一")
+    # 默认模板按系列自动选(template.docx / training_template.docx);--template/--into 显式优先。
+    default_tpl = TEMPLATE_TRAINING if is_training else TEMPLATE_E
+    base = args.into or args.template or default_tpl
+    if not os.path.exists(base):
+        eprint(f"[!] 找不到模板 {base}(--template 指定,或确认 skill assets 完整)")
         sys.exit(2)
     into_mode = bool(args.into)
-    append_sections = {"process"}  # 续写模式下「实验过程」保留已有(如4.1)、在末尾追加
+    append_sections = {"process"}  # 续写模式下「实验过程/实训内容」保留已有(如4.1)、在末尾追加
 
     doc = docx.Document(base)
     if not into_mode:
-        fill_header(doc, cfg, title)   # 续写模式表头已填,不动
-    for key in ("purpose", "materials", "process", "conclusion", "summary"):
+        fill_header(doc, cfg, title, is_training)   # 续写模式表头已填,不动
+    for key in labels:                 # 只遍历当前系列存在的栏目(training 仅 3 个)
         blocks = content["sections"].get(key, [])
-        if into_mode and not blocks:
-            continue                    # 续写模式下,没给内容的栏目原样保留
-        cell = content_cell(doc, key)
+        # 续写模式、或 training 模板自带内容的栏目没给内容 → 原样保留模板(不清空)
+        if not blocks and (into_mode or is_training):
+            continue
+        cell = content_cell(doc, labels[key])
         if cell is None:
-            eprint(f"[!] 模板里找不到栏目: {LABELS[key]}")
+            eprint(f"[!] 模板里找不到栏目: {labels[key]}")
             continue
         if not (into_mode and key in append_sections):
             clear_keep_label(cell)      # 续写模式的「实验过程」不清,直接在4.1后追加
         else:
             trim_trailing_empty(cell)   # 追加前裁掉末尾空白,内容紧跟占位标题
-        render_blocks(cell, blocks, sid3)
+        render_blocks(cell, blocks, sid3, actor)
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     doc.save(args.out)

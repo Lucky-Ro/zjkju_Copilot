@@ -120,10 +120,21 @@ H2  → 【任务提示】       → hints(本系列特有):其下每个
 }
 ```
 
-**怎么用**:training 任务多是「自己写程序 + 写 HiveQL + 出可视化图表」。`【任务要求】`告诉你要做什么、
-`【任务提示】`给样例 SQL/Java。Claude 据此**生成实际的 HiveQL**(author 步骤),通过 hive REPL 真跑、截图;
-Java 数据清洗与 Excel 可视化属 author/manual(由你写代码或提示用户用 GUI 完成,图放 `runs/tNN/manual/`)。
-学号/演员分配这类「因人而异」的输入,以 `lab_config.json` 与用户确认为准。
+**怎么用(P2–P4 已有内置参考实现,别从零猜)**:training 每个任务都围绕**「我的演员」**(P2 找该演员评分
+最高 5 部电影、P3 找合作最多的演员、P4 按年份做产量/评分可视化)。本 skill 已把三套**权威参考工程**抽象
+内置到 `assets/training-code/exp{1,2,3}`,完整流水线与 **canonical Hive SQL** 见
+**`references/training-v2-reference.md`**。标准做法:
+
+1. **查演员**:`python scripts/find_actor.py`——按 `lab_config.identity` 的姓名+学号在花名册
+   `学生演员分配*.xlsx` 里匹配,写进 `identity.actor`(子任务 `needs_actor=true` 即提示要做这步)。
+   脚本没命中再人工核对花名册兜底,**绝不瞎编**。
+2. **参数化工程**:`python scripts/prepare_training_project.py <P2|P3|P4>`——把内置模板物化到
+   `runs/tNN/project/`,包名 `hadoop9999`→`hadoop<sid3>`、`"我的演员"`→真实演员、拷入 Film.json。
+3. **真跑**:`mvn package` 出 jar → 跑 `Json2*Csv`/`hadoop jar` 产 CSV → 导入 Hive **逐条**跑
+   reference.md 里的 canonical SQL(真交互、每条一张截图)→ P4 用 Excel 出图(manual,放 `runs/tNN/manual/`)。
+
+`【任务要求】`告诉你要做什么、`【任务提示】`给样例,但**优先采用内置参考实现 + canonical SQL**(已验证),
+而不是即兴生成。学号/演员这类「因人而异」的输入,以 `lab_config.json`(find_actor 自动填)为准。
 
 ## auto / manual 判定(阶段 2 用)
 

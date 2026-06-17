@@ -5,6 +5,7 @@
     "name": "<你的姓名>",
     "student_id": "<完整学号>",
     "student_id_last3": "<自动派生,无需手填>",
+    "actor": "<training-v2 由 find_actor 自动匹配,可留空>",
     "college": "<学院>",
     "major_class": "<专业班级>",
     "instructor": "<指导教师>",

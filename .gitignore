@@ -1,0 +1,11 @@
+# ===== 课程资料库:绝不入库 =====
+# 含学生花名册(姓名/学号/演员 = PII)、Film.json(14MB 数据)、fastjson.jar、参考工程、实训报告 .doc 等。
+# skill 运行时从这里就地读取;skill 仓库只放抽象后的通用代码模板(skill/.../assets/training-code)。
+/hadoop集群部署实战/
+
+# 根目录素材副本(正解是 skill 自带的 skill/hadoop-lab-report/assets/FinalShellBackGround.png)
+/FinalShellBackGround.png
+
+# ===== Python =====
+__pycache__/
+*.pyc

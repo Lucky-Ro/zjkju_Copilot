@@ -172,6 +172,24 @@ def ask(label: str, current=None, default=None, secret: bool = False, required: 
         return v
 
 
+def _maybe_fill_actor(config_path: str, tutorial_url: str):
+    """training-v2 教程(P2–P4 围绕「我的演员」):身份齐了就顺手用 find_actor.py 按 姓名+学号 在
+    花名册里把演员查出来写进 identity.actor。**best-effort**——查不到(脚本退出 3)不报死,
+    留给大模型按花名册人工核对兜底,不阻断收集流程。e0* 教程直接跳过。"""
+    if "hadoop-training" not in (tutorial_url or ""):
+        return
+    script = os.path.join(HERE, "find_actor.py")
+    try:
+        r = subprocess.run([sys.executable, script, "--config", os.path.abspath(config_path)],
+                           cwd=os.getcwd())
+        if r.returncode == 0:
+            eprint("[actor] 已自动匹配演员并写入 identity.actor。")
+        else:
+            eprint("[actor] 脚本未能自动匹配演员(花名册缺失/没命中)——交给大模型按花名册人工核对兜底。")
+    except Exception as e:
+        eprint(f"[actor] 调用 find_actor 失败({type(e).__name__}: {e});交给大模型兜底。")
+
+
 def _resolve_or_ask(label, existing, default, secret: bool = False, validator=None):
     """连接/固定值:existing 或 default 有真实值 → **静默采用(不提示)**;都没有 → 提示必填。"""
     for v in (existing, default):
@@ -298,6 +316,8 @@ def autofill(config_path: str, tutorial_url: str = ""):
         "tutorial_url": tutorial_url,
     }
     _save(config_path, cfg)
+    # training 教程且身份已是真实值(同项目复用)时,顺手把演员也查出来;身份还是占位则此步 no-op。
+    _maybe_fill_actor(config_path, tutorial_url)
     eprint(f"[autofill] 教程缺省已落盘 {os.path.abspath(config_path)}(身份段为占位,待本人交互填写)。")
     eprint("脱敏总览:")
     eprint(json.dumps(_mask_obj(cfg, collect_secrets(cfg)), ensure_ascii=False, indent=2))
@@ -368,6 +388,8 @@ def interactive(config_path: str):
         "tutorial_url": tutorial_url,
     }
     _save(config_path, cfg)
+    # training-v2 教程:身份已收齐,这里按 姓名+学号 自动匹配演员写入 identity.actor(查不到不报死)。
+    _maybe_fill_actor(config_path, tutorial_url)
     print(f"\n[OK] 已写入 {os.path.abspath(config_path)}(密码只存这一个文件,已在 .gitignore)。")
     print("脱敏总览:")
     print(json.dumps(_mask_obj(cfg, collect_secrets(cfg)), ensure_ascii=False, indent=2))

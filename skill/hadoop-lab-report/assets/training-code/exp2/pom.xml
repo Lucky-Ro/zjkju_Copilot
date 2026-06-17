@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- P3 / training03:把 Film.json 里「我的演员」的电影筛出转 CSV,再导入 Hive 做合作演员分析。
+     纯 Java(只依赖 fastjson),本地 main() 跑出 CoActor.csv;后续 Hive 部分见 references/training-v2-reference.md。
+     占位:包名 hadoop9999 的 9999 = 学号后三位(prepare_training_project.py 替换)。 -->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>org.example</groupId>
+    <artifactId>hdp-training-exp2</artifactId>
+    <version>1.0</version>
+    <properties>
+        <maven.compiler.source>8</maven.compiler.source>
+        <maven.compiler.target>8</maven.compiler.target>
+        <project.build.sourceEncoding>UTF8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF8</project.reporting.outputEncoding>
+        <maven.compiler.encoding>UTF8</maven.compiler.encoding>
+    </properties>
+    <dependencies>
+        <dependency>
+            <groupId>com.alibaba</groupId>
+            <artifactId>fastjson</artifactId>
+            <version>1.2.62</version>
+        </dependency>
+    </dependencies>
+</project>

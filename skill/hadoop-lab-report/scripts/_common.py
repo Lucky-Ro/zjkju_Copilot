@@ -156,3 +156,35 @@ def apply_sid(text: str, sid3: str) -> str:
     text = re.sub(_SID_PH, sid3, text)
     text = re.sub(r"<\s*学号\s*>", sid3, text)
     return text
+
+
+# 演员占位的各种写法(training-v2 系列:每个任务都围绕「我的演员」)。长的排前面,
+# 避免 `我的演员` 先把 `修改为我的演员的姓名` 吃掉。
+_ACTOR_PH = (
+    "修改为我的演员的姓名",   # 教程/README Java 样例里的占位
+    "我的演员姓名",           # README 样例 String actor="我的演员姓名"
+    "<我的演员>",             # 本 skill 内置参考模板里的占位
+    "你的演员",
+    "我的演员",
+)
+
+
+def apply_actor(text: str, actor: str) -> str:
+    """演员占位替换:把生成/参考内容里的演员占位统一换成本人分配到的演员(actor)。
+
+    覆盖两类:
+    1. **Java 常量** `ACTOR="..."`(参考工程里写死的 王祖贤/王菲,或抽象模板里的 `<我的演员>`)
+       → 把双引号里的值整体设为真实演员,无论原值是真名还是占位。
+    2. **文案/样例占位**:修改为我的演员的姓名 / 我的演员姓名 / <我的演员> / 你的演员 / 我的演员。
+
+    只在**传入的这段内容**上替换——由调用方对「确实要个性化的代码 / SQL / 报告段」显式调用,
+    不全局乱改教程标题。actor 为空则原样返回(没查到演员时不乱替)。
+    """
+    if not text or not actor:
+        return text
+    # 1) Java 常量 ACTOR="..." 的值(\g<1>/\g<2> 防止与后续数字粘连)
+    text = re.sub(r'(ACTOR\s*=\s*")[^"]*(")', r"\g<1>" + actor + r"\g<2>", text)
+    # 2) 文案/样例占位(长的先替)
+    for ph in _ACTOR_PH:
+        text = text.replace(ph, actor)
+    return text
